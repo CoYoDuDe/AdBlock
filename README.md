@@ -23,3 +23,9 @@ Um den automatischen Upload zu deaktivieren oder anzupassen, suchen Sie im Skrip
 
 ## Installation und Verwendung
 Beschreiben Sie hier die Schritte zur Installation und Verwendung des Skripts.
+
+## Geplante Funktionen
+- [ ] Integration von Adblocking mit dnsmasq
+- [ ] Verbesserung der Parallelisierungslogik
+- [ ] Hinzufügen von automatisierten Tests
+
