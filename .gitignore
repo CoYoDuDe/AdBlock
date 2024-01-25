@@ -1,0 +1,11 @@
+# Ignoriere alle .log Dateien
+*.log
+
+# Ignoriere eine spezifische Datei
+hosts_sources.conf
+hosts.txt
+
+# Ignoriere den gesamten Ordner 'backup'
+Dropbox-Uploader/
+tmp/
+
