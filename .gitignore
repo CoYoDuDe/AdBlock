@@ -3,7 +3,6 @@
 
 # Ignoriere eine spezifische Datei
 hosts_sources.conf
-hosts.txt
 
 # Ignoriere den gesamten Ordner 'backup'
 tmp/
