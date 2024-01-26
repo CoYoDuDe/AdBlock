@@ -23,7 +23,7 @@ Um den automatischen Upload zu deaktivieren oder anzupassen, suchen Sie im Skrip
 
 ## Installation und Verwendung
 ### Bash-Skript ausführbar machen:
-chmod chmod +x Update_AdBlock.sh
+chmod +x Update_AdBlock.sh
 
 ### Bash-Skript ausführen:
 ./Update_AdBlock.sh
