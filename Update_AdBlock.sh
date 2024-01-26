@@ -95,18 +95,18 @@ NEW_HASH=$(md5sum "$SORTED_FINAL_HOSTS" | awk '{print $1}')
 if [ "$NEW_HASH" != "$PREVIOUS_HASH" ]; then
     echo "Die Hosts-Datei hat sich geändert. Hochladen..."
 
-# Verschieben der neuen Datei
-sudo mv -f $SORTED_FINAL_HOSTS $ADBLOCK_DIR/hosts.txt
+    # Verschieben der neuen Datei
+    sudo mv -f $SORTED_FINAL_HOSTS $ADBLOCK_DIR/hosts.txt
 
-# Upload zur GitHub
-cd $ADBLOCK_DIR
-git add hosts.txt
-git commit -m "Update Hosts-Datei"
-git push origin main
+    # Upload zur GitHub im Hintergrund (verschieben Sie den Push in den Hintergrund)
+    (cd $ADBLOCK_DIR && git add hosts.txt && git commit -m "Update Hosts-Datei" && git push origin main) &
 
 else
     echo "Keine Änderungen in der Hosts-Datei. Nicht hochladen."
 fi
+
+# Warten Sie auf den Abschluss des Push-Vorgangs im Hintergrund, bevor das Skript fortgesetzt wird
+wait
 
 # Bereinige temporäre Dateien
 rm $COMBINED_HOSTS
