@@ -2,6 +2,7 @@
 
 # Konfigurationseinstellungen
 ENABLE_PARALLEL=1  # Parallelisierung aktivieren (1 für ja, 0 für nein)
+HOSTS_SOURCES_FILE="/home/pi/AdBlock/hosts_sources.conf"  # Pfad zur Hosts_Sources Datei
 TMP_DIR="/home/pi/AdBlock/tmp"  # Temporärer Ordner für individuelle Hosts-Dateien
 HASH_DIR="$TMP_DIR/hash_files"  # Ordner für Hash-Dateien
 COMBINED_HOSTS="$TMP_DIR/hosts_combined.txt"  # Kombinierte Hosts-Datei
@@ -10,8 +11,8 @@ SORTED_FINAL_HOSTS="$TMP_DIR/sorted_final_hosts.txt"  # Sortierte und bereinigte
 PIHOLE_DB="/etc/pihole/gravity.db"  # Pi-hole Datenbankpfad
 ADBLOCK_DIR="/home/pi/AdBlock"  # Hauptverzeichnis für AdBlock
 
-# Lese HOSTS_SOURCES aus einer externen Datei
-readarray -t HOSTS_SOURCES < hosts_sources.conf
+# Lese HOSTS_SOURCES aus der externen Datei
+readarray -t HOSTS_SOURCES < "$HOSTS_SOURCES_FILE"
 
 download_and_process_file() {
     URL=$1
@@ -82,12 +83,10 @@ if [ "$NEW_HASH" != "$PREVIOUS_HASH" ]; then
 # Verschieben der neuen Datei
 sudo mv -f $SORTED_FINAL_HOSTS $ADBLOCK_DIR/hosts.txt
 
-# Upload zur Dropbox
-$ADBLOCK_DIR/Dropbox-Uploader/dropbox_uploader.sh upload $ADBLOCK_DIR/hosts.txt /
-
 # Upload zur GitHub
-git add Update_AdBlock.sh hosts.txt
-git commit -m "Update Hosts-Datei und Skript"
+cd $ADBLOCK_DIR
+git add hosts.txt
+git commit -m "Update Hosts-Datei"
 git push origin main
 
 else
