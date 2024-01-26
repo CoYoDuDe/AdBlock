@@ -11,6 +11,21 @@ SORTED_FINAL_HOSTS="$TMP_DIR/sorted_final_hosts.txt"  # Sortierte und bereinigte
 PIHOLE_DB="/etc/pihole/gravity.db"  # Pi-hole Datenbankpfad
 ADBLOCK_DIR="/home/pi/AdBlock"  # Hauptverzeichnis für AdBlock
 
+# Prüfen, ob die Datei hosts_sources.conf existiert, andernfalls erstellen Sie sie mit Beispieldaten
+if [ ! -f "$HOSTS_SOURCES_FILE" ]; then
+    echo "# Beispiel Hosts-Quellen für das AdBlock Skript" > "$HOSTS_SOURCES_FILE"
+    echo "# Fügen Sie hier Ihre Hosts-Datei URLs hinzu" >> "$HOSTS_SOURCES_FILE"
+    echo "# Jede URL sollte in einer neuen Zeile stehen" >> "$HOSTS_SOURCES_FILE"
+    echo "" >> "$HOSTS_SOURCES_FILE"
+    echo "https://example.com/hosts1.txt" >> "$HOSTS_SOURCES_FILE"
+    echo "https://example.com/hosts2.txt" >> "$HOSTS_SOURCES_FILE"
+    echo "# Fügen Sie weitere URLs nach demselben Muster hinzu" >> "$HOSTS_SOURCES_FILE"
+
+    echo "Die Datei hosts_sources.conf wurde erstellt. Fügen Sie Ihre Hosts-Datei URLs hinzu und führen Sie das Skript erneut aus."
+
+exit 1
+fi
+
 # Lese HOSTS_SOURCES aus der externen Datei
 readarray -t HOSTS_SOURCES < "$HOSTS_SOURCES_FILE"
 
