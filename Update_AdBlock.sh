@@ -1,15 +1,39 @@
 #!/bin/bash -e
 
 # Konfigurationseinstellungen
-ENABLE_PARALLEL=1  # Parallelisierung aktivieren (1 für ja, 0 für nein)
-HOSTS_SOURCES_FILE="/home/pi/AdBlock/hosts_sources.conf"  # Pfad zur Hosts_Sources Datei
-TMP_DIR="/home/pi/AdBlock/tmp"  # Temporärer Ordner für individuelle Hosts-Dateien
-HASH_DIR="$TMP_DIR/hash_files"  # Ordner für Hash-Dateien
-COMBINED_HOSTS="$TMP_DIR/hosts_combined.txt"  # Kombinierte Hosts-Datei
-FINAL_HOSTS="$TMP_DIR/final_hosts.txt"  # Endgültige Hosts-Datei
-SORTED_FINAL_HOSTS="$TMP_DIR/sorted_final_hosts.txt"  # Sortierte und bereinigte Hosts-Datei
-PIHOLE_DB="/etc/pihole/gravity.db"  # Pi-hole Datenbankpfad
-ADBLOCK_DIR="/home/pi/AdBlock"  # Hauptverzeichnis für AdBlock
+ENABLE_PARALLEL=1
+HOSTS_SOURCES_FILE="/home/pi/AdBlock/hosts_sources.conf"
+TMP_DIR="/home/pi/AdBlock/tmp"
+HASH_DIR="$TMP_DIR/hash_files"
+COMBINED_HOSTS="$TMP_DIR/hosts_combined.txt"
+FINAL_HOSTS="$TMP_DIR/final_hosts.txt"
+SORTED_FINAL_HOSTS="$TMP_DIR/sorted_final_hosts.txt"
+PIHOLE_DB="/etc/pihole/gravity.db"
+ADBLOCK_DIR="/home/pi/AdBlock"
+
+# Funktion zum Herunterladen und Verarbeiten von Hosts-Dateien
+download_and_process_file() {
+    URL=$1
+    URL_HASH=$(echo -n "$URL" | md5sum | awk '{print $1}')
+    FILE_NAME=$(basename "$URL")
+    HOST_FILE="$TMP_DIR/hosts_individual/${URL_HASH}_${FILE_NAME}"
+    HASH_FILE="$HASH_DIR/hash_${URL_HASH}_${FILE_NAME}"
+
+    if [ -f "$HASH_FILE" ]; then
+        OLD_HASH=$(cat "$HASH_FILE")
+    else
+        OLD_HASH=""
+    fi
+
+    NEW_HASH=$(curl -sL "$URL" | md5sum | awk '{print $1}')
+    if [ "$NEW_HASH" != "$OLD_HASH" ]; then
+        echo "Lade Hosts von $URL herunter, da Änderungen erkannt wurden..."
+        curl -sL "$URL" > "$HOST_FILE"
+        echo "$NEW_HASH" > "$HASH_FILE"
+    else
+        echo "Keine Änderungen in $URL"
+    fi
+}
 
 # Prüfen, ob die Datei hosts_sources.conf existiert, andernfalls erstellen Sie sie mit Beispieldaten
 if [ ! -f "$HOSTS_SOURCES_FILE" ]; then
@@ -23,61 +47,38 @@ if [ ! -f "$HOSTS_SOURCES_FILE" ]; then
 
     echo "Die Datei hosts_sources.conf wurde erstellt. Fügen Sie Ihre Hosts-Datei URLs hinzu und führen Sie das Skript erneut aus."
 
-exit 1
+    exit 1
 fi
 
 # Lese HOSTS_SOURCES aus der externen Datei
 readarray -t HOSTS_SOURCES < "$HOSTS_SOURCES_FILE"
 
-download_and_process_file() {
-    URL=$1
-    URL_HASH=$(echo -n "$URL" | md5sum | awk '{print $1}')
-    FILE_NAME=$(basename ${URL})
-    HOST_FILE="$TMP_DIR/hosts_individual/${URL_HASH}_${FILE_NAME}"
-    HASH_FILE="$HASH_DIR/hash_${URL_HASH}_${FILE_NAME}"
-
-    if [ -f "$HASH_FILE" ]; then
-        OLD_HASH=$(cat $HASH_FILE)
-    else
-        OLD_HASH=""
-    fi
-
-    NEW_HASH=$(curl -sL $URL | md5sum | awk '{print $1}')
-    if [ "$NEW_HASH" != "$OLD_HASH" ]; then
-        echo "Lade Hosts von $URL herunter, da Änderungen erkannt wurden..."
-        curl -sL $URL > "$HOST_FILE"
-        echo $NEW_HASH > $HASH_FILE
-    else
-        echo "Keine Änderungen in $URL"
-    fi
-}
-
 # Erstelle erforderliche Verzeichnisse
-mkdir -p $TMP_DIR  # Erstellt das Hauptverzeichnis für temporäre Dateien
-mkdir -p $TMP_DIR/hosts_individual  # Erstellt den Unterordner für individuelle Hosts-Dateien
-mkdir -p $HASH_DIR  # Erstellt den Ordner für Hash-Dateien
+mkdir -p "$TMP_DIR"
+mkdir -p "$TMP_DIR/hosts_individual"
+mkdir -p "$HASH_DIR"
 
 # Herunterladen und Verarbeiten der Hosts-Dateien
 if [ "$ENABLE_PARALLEL" -eq 1 ]; then
     for URL in "${HOSTS_SOURCES[@]}"; do
-        (download_and_process_file $URL) &
+        (download_and_process_file "$URL") &
     done
     wait
 else
     for URL in "${HOSTS_SOURCES[@]}"; do
-        download_and_process_file $URL
+        download_and_process_file "$URL"
     done
 fi
 
 # Kombinieren aller gespeicherten Hosts-Listen in eine Datei
 > "$COMBINED_HOSTS"
-for FILE in $TMP_DIR/hosts_individual/*; do
+for FILE in "$TMP_DIR/hosts_individual"/*; do
     cat "$FILE" | sort | uniq >> "$COMBINED_HOSTS"
 done
 
 # Exportiere Blacklist und Whitelist aus Pi-hole
-sudo sqlite3 $PIHOLE_DB "SELECT domain FROM domainlist WHERE enabled = 1 AND type = 1;" >> "$COMBINED_HOSTS"
-sudo sqlite3 $PIHOLE_DB "SELECT DISTINCT domain FROM domainlist WHERE type=0;" > "$TMP_DIR/whitelist.txt"
+sudo sqlite3 "$PIHOLE_DB" "SELECT domain FROM domainlist WHERE enabled = 1 AND type = 1;" >> "$COMBINED_HOSTS"
+sudo sqlite3 "$PIHOLE_DB" "SELECT DISTINCT domain FROM domainlist WHERE type=0;" > "$TMP_DIR/whitelist.txt"
 
 # Bereinige und formatiere die kombinierte Hosts-Datei
 grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ .*\.[a-zA-Z]+$' "$COMBINED_HOSTS" | awk '{print "127.0.0.1 " $2}' > "$FINAL_HOSTS"
@@ -89,17 +90,17 @@ grep -Fvx -f "$TMP_DIR/whitelist.txt" "$FINAL_HOSTS" | sponge "$FINAL_HOSTS"
 sort "$FINAL_HOSTS" | uniq > "$SORTED_FINAL_HOSTS"
 
 # Prüfe, ob sich die Hosts-Datei geändert hat
-PREVIOUS_HASH=$(md5sum $ADBLOCK_DIR/hosts.txt | awk '{print $1}')
+PREVIOUS_HASH=$(md5sum "$ADBLOCK_DIR/hosts.txt" | awk '{print $1}')
 NEW_HASH=$(md5sum "$SORTED_FINAL_HOSTS" | awk '{print $1}')
 
 if [ "$NEW_HASH" != "$PREVIOUS_HASH" ]; then
     echo "Die Hosts-Datei hat sich geändert. Hochladen..."
 
     # Verschieben der neuen Datei
-    sudo mv -f $SORTED_FINAL_HOSTS $ADBLOCK_DIR/hosts.txt
+    sudo mv -f "$SORTED_FINAL_HOSTS" "$ADBLOCK_DIR/hosts.txt"
 
     # Upload zur GitHub im Hintergrund (verschieben Sie den Push in den Hintergrund)
-    (cd $ADBLOCK_DIR && git add hosts.txt && git commit -m "Update Hosts-Datei" && git push origin main) &
+    (cd "$ADBLOCK_DIR" && git add hosts.txt && git commit -m "Update Hosts-Datei" && git push origin main) &
 
 else
     echo "Keine Änderungen in der Hosts-Datei. Nicht hochladen."
@@ -109,9 +110,9 @@ fi
 wait
 
 # Bereinige temporäre Dateien
-rm $COMBINED_HOSTS
-rm $FINAL_HOSTS
-rm -r $TMP_DIR/whitelist.txt
+rm "$COMBINED_HOSTS"
+rm "$FINAL_HOSTS"
+rm -r "$TMP_DIR/whitelist.txt"
 
 # Update Pi-Hole und System NACH dem Erstellen der Hosts-Datei
 echo "Updating Pi-Hole..."
