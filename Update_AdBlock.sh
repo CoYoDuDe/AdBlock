@@ -27,25 +27,25 @@ download_and_process_file() {
 
     NEW_HASH=$(curl -sL "$URL" | md5sum | awk '{print $1}')
     if [ "$NEW_HASH" != "$OLD_HASH" ]; then
-        echo "Lade Hosts von $URL herunter, da Änderungen erkannt wurden..."
+        echo "Lade Hosts von $URL herunter, da Ã„nderungen erkannt wurden..."
         curl -sL "$URL" > "$HOST_FILE"
         echo "$NEW_HASH" > "$HASH_FILE"
     else
-        echo "Keine Änderungen in $URL"
+        echo "Keine Ã„nderungen in $URL"
     fi
 }
 
-# Prüfen, ob die Datei hosts_sources.conf existiert, andernfalls erstellen Sie sie mit Beispieldaten
+# PrÃ¼fen, ob die Datei hosts_sources.conf existiert, andernfalls erstellen Sie sie mit Beispieldaten
 if [ ! -f "$HOSTS_SOURCES_FILE" ]; then
-    echo "# Beispiel Hosts-Quellen für das AdBlock Skript" > "$HOSTS_SOURCES_FILE"
-    echo "# Fügen Sie hier Ihre Hosts-Datei URLs hinzu" >> "$HOSTS_SOURCES_FILE"
+    echo "# Beispiel Hosts-Quellen fÃ¼r das AdBlock Skript" > "$HOSTS_SOURCES_FILE"
+    echo "# FÃ¼gen Sie hier Ihre Hosts-Datei URLs hinzu" >> "$HOSTS_SOURCES_FILE"
     echo "# Jede URL sollte in einer neuen Zeile stehen" >> "$HOSTS_SOURCES_FILE"
     echo "" >> "$HOSTS_SOURCES_FILE"
     echo "https://example.com/hosts1.txt" >> "$HOSTS_SOURCES_FILE"
     echo "https://example.com/hosts2.txt" >> "$HOSTS_SOURCES_FILE"
-    echo "# Fügen Sie weitere URLs nach demselben Muster hinzu" >> "$HOSTS_SOURCES_FILE"
+    echo "# FÃ¼gen Sie weitere URLs nach demselben Muster hinzu" >> "$HOSTS_SOURCES_FILE"
 
-    echo "Die Datei hosts_sources.conf wurde erstellt. Fügen Sie Ihre Hosts-Datei URLs hinzu und führen Sie das Skript erneut aus."
+    echo "Die Datei hosts_sources.conf wurde erstellt. FÃ¼gen Sie Ihre Hosts-Datei URLs hinzu und fÃ¼hren Sie das Skript erneut aus."
 
     exit 1
 fi
@@ -83,18 +83,18 @@ sudo sqlite3 "$PIHOLE_DB" "SELECT DISTINCT domain FROM domainlist WHERE type=0;"
 # Bereinige und formatiere die kombinierte Hosts-Datei
 grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ .*\.[a-zA-Z]+$' "$COMBINED_HOSTS" | awk '{print "127.0.0.1 " $2}' > "$FINAL_HOSTS"
 
-# Entferne Whitelist-Einträge
+# Entferne Whitelist-EintrÃ¤ge
 grep -Fvx -f "$TMP_DIR/whitelist.txt" "$FINAL_HOSTS" | sponge "$FINAL_HOSTS"
 
 # Sortieren und Duplikate entfernen
 sort "$FINAL_HOSTS" | uniq > "$SORTED_FINAL_HOSTS"
 
-# Prüfe, ob sich die Hosts-Datei geändert hat
+# PrÃ¼fe, ob sich die Hosts-Datei geÃ¤ndert hat
 PREVIOUS_HASH=$(md5sum "$ADBLOCK_DIR/hosts.txt" | awk '{print $1}')
 NEW_HASH=$(md5sum "$SORTED_FINAL_HOSTS" | awk '{print $1}')
 
 if [ "$NEW_HASH" != "$PREVIOUS_HASH" ]; then
-    echo "Die Hosts-Datei hat sich geändert. Hochladen..."
+    echo "Die Hosts-Datei hat sich geÃ¤ndert. Hochladen..."
 
     # Verschieben der neuen Datei
     sudo mv -f "$SORTED_FINAL_HOSTS" "$ADBLOCK_DIR/hosts.txt"
@@ -103,13 +103,13 @@ if [ "$NEW_HASH" != "$PREVIOUS_HASH" ]; then
     (cd "$ADBLOCK_DIR" && git add hosts.txt && git commit -m "Update Hosts-Datei" && git push origin main) &
 
 else
-    echo "Keine Änderungen in der Hosts-Datei. Nicht hochladen."
+    echo "Keine Ã„nderungen in der Hosts-Datei. Nicht hochladen."
 fi
 
 # Warten Sie auf den Abschluss des Push-Vorgangs im Hintergrund, bevor das Skript fortgesetzt wird
 wait
 
-# Bereinige temporäre Dateien
+# Bereinige temporÃ¤re Dateien
 rm "$COMBINED_HOSTS"
 rm "$FINAL_HOSTS"
 rm -r "$TMP_DIR/whitelist.txt"
