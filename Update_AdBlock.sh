@@ -52,6 +52,7 @@ fi
 # Funktion zum Herunterladen und Verarbeiten von Hosts-Dateien
 download_and_process_file() {
     URL=$1
+    log "Beginne Download von $URL"
     URL_HASH=$(echo -n "$URL" | md5sum | awk '{print $1}')
     FILE_NAME=$(basename "$URL")
     HOST_FILE="$TMP_DIR/hosts_individual/${URL_HASH}_${FILE_NAME}"
@@ -64,8 +65,10 @@ download_and_process_file() {
     fi
 
     for ((i=1; i<=MAX_RETRIES; i++)); do
+        log "Versuche, Hosts-Datei von $URL herunterzuladen (Versuch $i)..."
         NEW_HASH=$(curl -sL "$URL" | md5sum | awk '{print $1}')
         if [ $? -eq 0 ]; then
+            log "Download erfolgreich: $URL (Hash: $NEW_HASH)"
             break
         elif [ $i -eq $MAX_RETRIES ]; then
             error_exit "Fehler beim Herunterladen von $URL nach $MAX_RETRIES Versuchen"
@@ -76,13 +79,17 @@ download_and_process_file() {
     done
 
     if [ "$NEW_HASH" != "$OLD_HASH" ]; then
-        log "Lade Hosts von $URL herunter, da Änderungen erkannt wurden..."
+        log "Änderungen erkannt in $URL. Neue Datei gespeichert: $HOST_FILE"
         curl -sL "$URL" > "$HOST_FILE" || error_exit "Fehler beim Herunterladen von $URL"
         echo "$NEW_HASH" > "$HASH_FILE"
     else
         log "Keine Änderungen in $URL"
     fi
 }
+
+export -f download_and_process_file
+export -f log
+export -f error_exit
 
 # Funktion zum Hochladen der Datei zu GitHub
 upload_to_github() {
@@ -116,20 +123,40 @@ mkdir -p "$TMP_DIR/hosts_individual"
 mkdir -p "$HASH_DIR"
 
 # Herunterladen und Verarbeiten der Hosts-Dateien
+log "Starte den Download-Prozess der Hosts-Dateien..."
 if [ "$ENABLE_PARALLEL" -eq 1 ] && command -v parallel >/dev/null 2>&1; then
-    export -f download_and_process_file log error_exit
-    parallel download_and_process_file ::: "${HOSTS_SOURCES[@]}"
+    parallel -j 4 download_and_process_file ::: "${HOSTS_SOURCES[@]}"
 else
     for URL in "${HOSTS_SOURCES[@]}"; do
+        log "Verarbeite URL: $URL"
         download_and_process_file "$URL"
     done
 fi
 
+# Prüfen, ob das Verzeichnis existiert und Dateien enthält
+if [ -d "$TMP_DIR/hosts_individual" ]; then
+    log "Das Verzeichnis hosts_individual existiert."
+    if [ "$(ls -A $TMP_DIR/hosts_individual)" ]; then
+        log "Das Verzeichnis hosts_individual ist nicht leer."
+    else
+        log "Das Verzeichnis hosts_individual ist leer."
+    fi
+else
+    log "Das Verzeichnis hosts_individual existiert nicht."
+fi
+
 # Kombinieren aller gespeicherten Hosts-Listen in eine Datei
 > "$COMBINED_HOSTS"
-for FILE in "$TMP_DIR/hosts_individual"/*; do
-    cat "$FILE" | sort | uniq >> "$COMBINED_HOSTS"
-done
+if [ -d "$TMP_DIR/hosts_individual" ] && [ "$(ls -A $TMP_DIR/hosts_individual)" ]; then
+    log "Beginne Kombination der Hosts-Dateien..."
+    for FILE in "$TMP_DIR/hosts_individual"/*; do
+        log "Füge Datei hinzu: $FILE"
+        cat "$FILE" | sort | uniq >> "$COMBINED_HOSTS"
+    done
+else
+    log "Keine Hosts-Dateien gefunden, die kombiniert werden könnten."
+    error_exit "Keine Hosts-Dateien gefunden, die kombiniert werden könnten."
+fi
 
 # Exportiere Blacklist und Whitelist aus Pi-hole
 sudo sqlite3 "$PIHOLE_DB" "SELECT domain FROM domainlist WHERE enabled = 1 AND type = 1;" >> "$COMBINED_HOSTS"
@@ -166,9 +193,8 @@ else
     log "Keine Änderungen in der Hosts-Datei. Nicht hochladen."
 fi
 
-# Bereinige temporäre Dateien, aber nicht die Hash-Dateien
+# Bereinige temporäre Dateien, aber nicht die heruntergeladenen Hosts-Dateien und die Hash-Dateien
 rm -f "$COMBINED_HOSTS" "$FINAL_HOSTS" "$TMP_DIR/whitelist.txt"
-rm -rf "$TMP_DIR/hosts_individual"
 
 # Update Pi-Hole und System NACH dem Erstellen der Hosts-Datei
 log "Updating Pi-Hole..."
