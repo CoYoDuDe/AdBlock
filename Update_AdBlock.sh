@@ -5,7 +5,7 @@ LOG_FILE="/home/pi/AdBlock/update.log"
 EMAIL="lothar.scheer@gmail.com" # Ersetze dies durch die tatsächliche E-Mail-Adresse für Benachrichtigungen
 MAX_RETRIES=3
 RETRY_DELAY=5
-ENABLE_PARALLEL=1  # Aktivieren Sie die parallele Verarbeitung
+ENABLE_PARALLEL=0  # Deaktivieren Sie die parallele Verarbeitung vorerst
 HOSTS_SOURCES_FILE="/home/pi/AdBlock/hosts_sources.conf"
 TMP_DIR="/home/pi/AdBlock/tmp"
 HASH_DIR="$TMP_DIR/hash_files"
@@ -81,26 +81,27 @@ download_and_process_file() {
         echo "$CONTENT" > "$HOST_FILE" || error_exit "Fehler beim Speichern von $URL"
         echo "$NEW_HASH" > "$HASH_FILE"
     else
-        log "Keine Änderungen in $URL"
+        log "Keine Änderungen in $URL. Datei wird nicht heruntergeladen: $URL"
     fi
 }
-
-export -f download_and_process_file
-export -f log
-export -f error_exit
 
 # Funktion zum Hochladen der Datei zu GitHub
 upload_to_github() {
     cd "$ADBLOCK_DIR" || error_exit "Fehler beim Wechseln in das Verzeichnis $ADBLOCK_DIR"
-    
-    # Sicherstellen, dass wir auf dem neuesten Stand sind
+
+    # Abrufen der neuesten Änderungen von GitHub und Zurücksetzen auf die neueste Version
     git fetch origin main || error_exit "Fehler beim Abrufen der neuesten Änderungen von GitHub"
     git reset --hard origin/main || error_exit "Fehler beim Zurücksetzen auf die neueste Version"
-    
-    git add hosts.txt || error_exit "Fehler beim Hinzufügen der Datei hosts.txt"
-    git commit -m "Update Hosts-Datei" || error_exit "Fehler beim Commit der Änderungen"
-    git push origin main || error_exit "Fehler beim Push zu GitHub"
-    send_email "Erfolg: AdBlock-Skript" "Die Hosts-Datei wurde erfolgreich zu GitHub hochgeladen."
+
+    # Überprüfen, ob es Änderungen in der hosts.txt gibt
+    if ! git diff --quiet -- hosts.txt; then
+        git add hosts.txt || error_exit "Fehler beim Hinzufügen der Datei hosts.txt"
+        git commit -m "Update Hosts-Datei" || error_exit "Fehler beim Commit der Änderungen"
+        git push origin main || error_exit "Fehler beim Push zu GitHub"
+        send_email "Erfolg: AdBlock-Skript" "Die Hosts-Datei wurde erfolgreich zu GitHub hochgeladen."
+    else
+        log "Keine Änderungen in der hosts.txt, daher wird nichts hochgeladen."
+    fi
 }
 
 # Prüfen, ob die Datei hosts_sources.conf existiert, andernfalls erstellen Sie sie mit Beispieldaten
@@ -125,40 +126,24 @@ mkdir -p "$TMP_DIR"
 mkdir -p "$TMP_DIR/hosts_individual"
 mkdir -p "$HASH_DIR"
 
-# Herunterladen und Verarbeiten der Hosts-Dateien
 log "Starte den Download-Prozess der Hosts-Dateien..."
+
+# Herunterladen und Verarbeiten der Hosts-Dateien
 if [ "$ENABLE_PARALLEL" -eq 1 ] && command -v parallel >/dev/null 2>&1; then
-    parallel -j 4 download_and_process_file ::: "${HOSTS_SOURCES[@]}"
+    export -f download_and_process_file log error_exit
+    parallel download_and_process_file ::: "${HOSTS_SOURCES[@]}"
 else
     for URL in "${HOSTS_SOURCES[@]}"; do
         download_and_process_file "$URL"
     done
 fi
 
-# Prüfen, ob das Verzeichnis existiert und Dateien enthält
-if [ -d "$TMP_DIR/hosts_individual" ]; then
-    log "Das Verzeichnis hosts_individual existiert."
-    if [ "$(ls -A $TMP_DIR/hosts_individual)" ]; then
-        log "Das Verzeichnis hosts_individual ist nicht leer."
-    else
-        log "Das Verzeichnis hosts_individual ist leer."
-    fi
-else
-    log "Das Verzeichnis hosts_individual existiert nicht."
-fi
-
 # Kombinieren aller gespeicherten Hosts-Listen in eine Datei
 > "$COMBINED_HOSTS"
-if [ -d "$TMP_DIR/hosts_individual" ] && [ "$(ls -A $TMP_DIR/hosts_individual)" ]; then
-    log "Beginne Kombination der Hosts-Dateien..."
-    for FILE in "$TMP_DIR/hosts_individual"/*; do
-        log "Füge Datei hinzu: $FILE"
-        cat "$FILE" | sort | uniq >> "$COMBINED_HOSTS"
-    done
-else
-    log "Keine Hosts-Dateien gefunden, die kombiniert werden könnten."
-    error_exit "Keine Hosts-Dateien gefunden, die kombiniert werden könnten."
-fi
+for FILE in "$TMP_DIR/hosts_individual"/*; do
+    log "Füge Datei hinzu: $FILE"
+    cat "$FILE" | sort | uniq >> "$COMBINED_HOSTS"
+done
 
 # Exportiere Blacklist und Whitelist aus Pi-hole
 sudo sqlite3 "$PIHOLE_DB" "SELECT domain FROM domainlist WHERE enabled = 1 AND type = 1;" >> "$COMBINED_HOSTS"
@@ -188,7 +173,7 @@ if [ "$NEW_HASH" != "$PREVIOUS_HASH" ]; then
     # Verschieben der neuen Datei
     sudo mv -f "$SORTED_FINAL_HOSTS" "$ADBLOCK_DIR/hosts.txt"
 
-    # Upload zur GitHub
+    # Upload zu GitHub
     upload_to_github
 else
     log "Keine Änderungen in der Hosts-Datei. Nicht hochladen."
@@ -196,7 +181,6 @@ fi
 
 # Bereinige temporäre Dateien, aber nicht die Hash-Dateien
 rm -f "$COMBINED_HOSTS" "$FINAL_HOSTS" "$TMP_DIR/whitelist.txt"
-rm -rf "$TMP_DIR/hosts_individual"
 
 # Update Pi-Hole und System NACH dem Erstellen der Hosts-Datei
 log "Updating Pi-Hole..."
