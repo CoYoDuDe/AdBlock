@@ -2,10 +2,10 @@
 
 # Konfigurationseinstellungen
 LOG_FILE="/home/pi/AdBlock/update.log"
-EMAIL="lothar.scheer@gmail.com" # Ersetze dies durch die tatsächliche E-Mail-Adresse für Benachrichtigungen
+EMAIL="example@example.com" # Ersetze dies durch die tatsächliche E-Mail-Adresse für Benachrichtigungen
 MAX_RETRIES=3
 RETRY_DELAY=5
-ENABLE_PARALLEL=0  # Deaktivieren Sie die parallele Verarbeitung vorerst
+ENABLE_PARALLEL=0
 HOSTS_SOURCES_FILE="/home/pi/AdBlock/hosts_sources.conf"
 TMP_DIR="/home/pi/AdBlock/tmp"
 HASH_DIR="$TMP_DIR/hash_files"
