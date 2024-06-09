@@ -5,7 +5,7 @@ LOG_FILE="/home/pi/AdBlock/update.log"
 EMAIL="example@example.com" # Ersetze dies durch die tatsächliche E-Mail-Adresse für Benachrichtigungen
 MAX_RETRIES=3
 RETRY_DELAY=5
-ENABLE_PARALLEL=1
+ENABLE_PARALLEL=1  # Aktivieren Sie die parallele Verarbeitung
 HOSTS_SOURCES_FILE="/home/pi/AdBlock/hosts_sources.conf"
 TMP_DIR="/home/pi/AdBlock/tmp"
 HASH_DIR="$TMP_DIR/hash_files"
@@ -94,8 +94,17 @@ export -f error_exit
 # Funktion zum Hochladen der Datei zu GitHub
 upload_to_github() {
     cd "$ADBLOCK_DIR" || error_exit "Fehler beim Wechseln in das Verzeichnis $ADBLOCK_DIR"
+    
+    # Stash all changes except hosts.txt
+    git stash push -m "Stashing changes" -- $(git ls-files | grep -v "hosts.txt")
+    
     git add hosts.txt || error_exit "Fehler beim Hinzufügen der Datei hosts.txt"
     git commit -m "Update Hosts-Datei" || error_exit "Fehler beim Commit der Änderungen"
+    
+    # Pull latest changes and reapply stashed changes
+    git pull origin main --rebase
+    git stash pop
+    
     git push origin main || error_exit "Fehler beim Push zu GitHub"
     send_email "Erfolg: AdBlock-Skript" "Die Hosts-Datei wurde erfolgreich zu GitHub hochgeladen."
 }
@@ -172,7 +181,7 @@ grep -Fvx -f "$TMP_DIR/whitelist.txt" "$FINAL_HOSTS" | sponge "$FINAL_HOSTS"
 sort "$FINAL_HOSTS" | uniq > "$SORTED_FINAL_HOSTS"
 
 # Prüfe, ob sich die Hosts-Datei geändert hat
-if [ -f "$ADBLOCK_DIR/hosts.txt" ]; then
+if [ -f "$ADBLOCK_DIR/hosts.txt" ];hen
     PREVIOUS_HASH=$(md5sum "$ADBLOCK_DIR/hosts.txt" | awk '{print $1}')
 else
     PREVIOUS_HASH=""
