@@ -89,16 +89,24 @@ download_and_process_file() {
 upload_to_github() {
     cd "$ADBLOCK_DIR" || error_exit "Fehler beim Wechseln in das Verzeichnis $ADBLOCK_DIR"
 
-    # Stash alle Änderungen außer hosts.txt
-    git stash push -m "Stash all changes except hosts.txt" || error_exit "Fehler beim Stashen der Änderungen"
-    git stash apply stash@{0} -- hosts.txt || error_exit "Fehler beim Anwenden des Stash für hosts.txt"
-    git stash drop || error_exit "Fehler beim Löschen des Stash"
+    # Stash all changes
+    git stash push -m "Stash all changes" || error_exit "Fehler beim Stashen der Änderungen"
 
-    # Commit und Push nur hosts.txt
-    git add hosts.txt || error_exit "Fehler beim Hinzufügen der Datei hosts.txt"
-    git commit -m "Update Hosts-Datei" || error_exit "Fehler beim Commit der Änderungen"
-    git push origin main || error_exit "Fehler beim Push zu GitHub"
-    send_email "Erfolg: AdBlock-Skript" "Die Hosts-Datei wurde erfolgreich zu GitHub hochgeladen."
+    # Apply the stash only for hosts.txt
+    git stash apply stash@{0} -- hosts.txt || error_exit "Fehler beim Anwenden des Stash für hosts.txt"
+
+    # Commit and push only hosts.txt
+    if git diff --cached --quiet; then
+        log "Keine Änderungen in der Hosts-Datei. Kein Commit erforderlich."
+    else
+        git add hosts.txt || error_exit "Fehler beim Hinzufügen der Datei hosts.txt"
+        git commit -m "Update Hosts-Datei" || error_exit "Fehler beim Commit der Änderungen"
+        git push origin main || error_exit "Fehler beim Push zu GitHub"
+        send_email "Erfolg: AdBlock-Skript" "Die Hosts-Datei wurde erfolgreich zu GitHub hochgeladen."
+    fi
+
+    # Drop the stash
+    git stash drop || error_exit "Fehler beim Löschen des Stash"
 }
 
 # Prüfen, ob die Datei hosts_sources.conf existiert, andernfalls erstellen Sie sie mit Beispieldaten
