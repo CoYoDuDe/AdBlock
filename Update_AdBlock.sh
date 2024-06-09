@@ -42,6 +42,7 @@ command -v curl >/dev/null 2>&1 || error_exit "curl ist nicht installiert. Bitte
 command -v sqlite3 >/dev/null 2>&1 || error_exit "sqlite3 ist nicht installiert. Bitte installieren Sie sqlite3."
 command -v git >/dev/null 2>&1 || error_exit "git ist nicht installiert. Bitte installieren Sie git."
 command -v sponge >/dev/null 2>&1 || error_exit "sponge ist nicht installiert. Bitte installieren Sie moreutils."
+command -v parallel >/dev/null 2>&1 || error_exit "parallel ist nicht installiert. Bitte installieren Sie parallel."
 
 # Überprüfe, ob 'mail' installiert ist
 if ! command -v mail >/dev/null 2>&1; then
@@ -134,7 +135,7 @@ mkdir -p "$HASH_DIR"
 log "Starte den Download-Prozess der Hosts-Dateien..."
 
 # Herunterladen und Verarbeiten der Hosts-Dateien
-if [ "$ENABLE_PARALLEL" -eq 1 ] && command -v parallel >/dev/null 2>&1; then
+if [ "$ENABLE_PARALLEL" -eq 1 ]; then
     export -f download_and_process_file log error_exit
     parallel download_and_process_file ::: "${HOSTS_SOURCES[@]}"
 else
