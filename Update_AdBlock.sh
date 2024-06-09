@@ -2,7 +2,7 @@
 
 # Konfigurationseinstellungen
 LOG_FILE="/home/pi/AdBlock/update.log"
-EMAIL="example@example.com" # Ersetze dies durch die tatsächliche E-Mail-Adresse für Benachrichtigungen
+EMAIL="lothar.scheer@gmail.com" # Ersetze dies durch die tatsächliche E-Mail-Adresse für Benachrichtigungen
 MAX_RETRIES=3
 RETRY_DELAY=5
 ENABLE_PARALLEL=1  # Aktivieren Sie die parallele Verarbeitung
@@ -52,7 +52,6 @@ fi
 # Funktion zum Herunterladen und Verarbeiten von Hosts-Dateien
 download_and_process_file() {
     URL=$1
-    log "Beginne Download von $URL"
     URL_HASH=$(echo -n "$URL" | md5sum | awk '{print $1}')
     FILE_NAME=$(basename "$URL")
     HOST_FILE="$TMP_DIR/hosts_individual/${URL_HASH}_${FILE_NAME}"
@@ -65,10 +64,9 @@ download_and_process_file() {
     fi
 
     for ((i=1; i<=MAX_RETRIES; i++)); do
-        log "Versuche, Hosts-Datei von $URL herunterzuladen (Versuch $i)..."
-        NEW_HASH=$(curl -sL "$URL" | md5sum | awk '{print $1}')
+        CONTENT=$(curl -sL "$URL")
+        NEW_HASH=$(echo -n "$CONTENT" | md5sum | awk '{print $1}')
         if [ $? -eq 0 ]; then
-            log "Download erfolgreich: $URL (Hash: $NEW_HASH)"
             break
         elif [ $i -eq $MAX_RETRIES ]; then
             error_exit "Fehler beim Herunterladen von $URL nach $MAX_RETRIES Versuchen"
@@ -80,7 +78,7 @@ download_and_process_file() {
 
     if [ "$NEW_HASH" != "$OLD_HASH" ]; then
         log "Änderungen erkannt in $URL. Neue Datei gespeichert: $HOST_FILE"
-        curl -sL "$URL" > "$HOST_FILE" || error_exit "Fehler beim Herunterladen von $URL"
+        echo "$CONTENT" > "$HOST_FILE" || error_exit "Fehler beim Speichern von $URL"
         echo "$NEW_HASH" > "$HASH_FILE"
     else
         log "Keine Änderungen in $URL"
@@ -95,16 +93,12 @@ export -f error_exit
 upload_to_github() {
     cd "$ADBLOCK_DIR" || error_exit "Fehler beim Wechseln in das Verzeichnis $ADBLOCK_DIR"
     
-    # Stash all changes except hosts.txt
-    git stash push -m "Stashing changes" -- $(git ls-files | grep -v "hosts.txt")
+    # Sicherstellen, dass wir auf dem neuesten Stand sind
+    git fetch origin main || error_exit "Fehler beim Abrufen der neuesten Änderungen von GitHub"
+    git reset --hard origin/main || error_exit "Fehler beim Zurücksetzen auf die neueste Version"
     
     git add hosts.txt || error_exit "Fehler beim Hinzufügen der Datei hosts.txt"
     git commit -m "Update Hosts-Datei" || error_exit "Fehler beim Commit der Änderungen"
-    
-    # Pull latest changes and reapply stashed changes
-    git pull origin main --rebase
-    git stash pop
-    
     git push origin main || error_exit "Fehler beim Push zu GitHub"
     send_email "Erfolg: AdBlock-Skript" "Die Hosts-Datei wurde erfolgreich zu GitHub hochgeladen."
 }
@@ -137,7 +131,6 @@ if [ "$ENABLE_PARALLEL" -eq 1 ] && command -v parallel >/dev/null 2>&1; then
     parallel -j 4 download_and_process_file ::: "${HOSTS_SOURCES[@]}"
 else
     for URL in "${HOSTS_SOURCES[@]}"; do
-        log "Verarbeite URL: $URL"
         download_and_process_file "$URL"
     done
 fi
@@ -181,7 +174,7 @@ grep -Fvx -f "$TMP_DIR/whitelist.txt" "$FINAL_HOSTS" | sponge "$FINAL_HOSTS"
 sort "$FINAL_HOSTS" | uniq > "$SORTED_FINAL_HOSTS"
 
 # Prüfe, ob sich die Hosts-Datei geändert hat
-if [ -f "$ADBLOCK_DIR/hosts.txt" ];hen
+if [ -f "$ADBLOCK_DIR/hosts.txt" ]; then
     PREVIOUS_HASH=$(md5sum "$ADBLOCK_DIR/hosts.txt" | awk '{print $1}')
 else
     PREVIOUS_HASH=""
@@ -197,13 +190,13 @@ if [ "$NEW_HASH" != "$PREVIOUS_HASH" ]; then
 
     # Upload zur GitHub
     upload_to_github
-
 else
     log "Keine Änderungen in der Hosts-Datei. Nicht hochladen."
 fi
 
-# Bereinige temporäre Dateien, aber nicht die heruntergeladenen Hosts-Dateien und die Hash-Dateien
+# Bereinige temporäre Dateien, aber nicht die Hash-Dateien
 rm -f "$COMBINED_HOSTS" "$FINAL_HOSTS" "$TMP_DIR/whitelist.txt"
+rm -rf "$TMP_DIR/hosts_individual"
 
 # Update Pi-Hole und System NACH dem Erstellen der Hosts-Datei
 log "Updating Pi-Hole..."
