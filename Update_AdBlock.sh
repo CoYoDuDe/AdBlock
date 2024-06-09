@@ -92,11 +92,11 @@ upload_to_github() {
     # Stash all changes
     git stash push -m "Stash all changes" || error_exit "Fehler beim Stashen der Änderungen"
 
-    # Apply the stash only for hosts.txt
-    git stash apply stash@{0} -- hosts.txt || error_exit "Fehler beim Anwenden des Stash für hosts.txt"
+    # Restore the stashed changes for hosts.txt
+    git checkout stash@{0} -- hosts.txt || error_exit "Fehler beim Anwenden des Stash für hosts.txt"
 
     # Commit and push only hosts.txt
-    if git diff --cached --quiet; then
+    if git diff --quiet hosts.txt; then
         log "Keine Änderungen in der Hosts-Datei. Kein Commit erforderlich."
     else
         git add hosts.txt || error_exit "Fehler beim Hinzufügen der Datei hosts.txt"
