@@ -89,19 +89,16 @@ download_and_process_file() {
 upload_to_github() {
     cd "$ADBLOCK_DIR" || error_exit "Fehler beim Wechseln in das Verzeichnis $ADBLOCK_DIR"
 
-    # Abrufen der neuesten Änderungen von GitHub und Zurücksetzen auf die neueste Version
-    git fetch origin main || error_exit "Fehler beim Abrufen der neuesten Änderungen von GitHub"
-    git reset --hard origin/main || error_exit "Fehler beim Zurücksetzen auf die neueste Version"
+    # Stash alle Änderungen außer hosts.txt
+    git stash push -m "Stash all changes except hosts.txt" || error_exit "Fehler beim Stashen der Änderungen"
+    git stash apply stash@{0} -- hosts.txt || error_exit "Fehler beim Anwenden des Stash für hosts.txt"
+    git stash drop || error_exit "Fehler beim Löschen des Stash"
 
-    # Überprüfen, ob es Änderungen in der hosts.txt gibt
-    if ! git diff --quiet -- hosts.txt; then
-        git add hosts.txt || error_exit "Fehler beim Hinzufügen der Datei hosts.txt"
-        git commit -m "Update Hosts-Datei" || error_exit "Fehler beim Commit der Änderungen"
-        git push origin main || error_exit "Fehler beim Push zu GitHub"
-        send_email "Erfolg: AdBlock-Skript" "Die Hosts-Datei wurde erfolgreich zu GitHub hochgeladen."
-    else
-        log "Keine Änderungen in der hosts.txt, daher wird nichts hochgeladen."
-    fi
+    # Commit und Push nur hosts.txt
+    git add hosts.txt || error_exit "Fehler beim Hinzufügen der Datei hosts.txt"
+    git commit -m "Update Hosts-Datei" || error_exit "Fehler beim Commit der Änderungen"
+    git push origin main || error_exit "Fehler beim Push zu GitHub"
+    send_email "Erfolg: AdBlock-Skript" "Die Hosts-Datei wurde erfolgreich zu GitHub hochgeladen."
 }
 
 # Prüfen, ob die Datei hosts_sources.conf existiert, andernfalls erstellen Sie sie mit Beispieldaten
