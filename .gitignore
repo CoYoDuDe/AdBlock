@@ -1,9 +1,0 @@
-# Ignoriere alle .log Dateien
-*.log
-
-# Ignoriere eine spezifische Datei
-hosts_sources.conf
-
-# Ignoriere den gesamten Ordner 'backup'
-tmp/
-
