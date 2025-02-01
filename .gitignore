@@ -1,6 +1,8 @@
-adblock.py
-blacklist.txt
-config.json
-hosts_sources.conf
-tmp/
-whitelist.txt
+# Alles ignorieren
+*
+
+# Ausnahme: .gitignore soll NICHT ignoriert werden
+!.gitignore
+
+# Ausnahme: hosts.txt soll NICHT ignoriert werden
+!hosts.txt
