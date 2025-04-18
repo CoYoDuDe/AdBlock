@@ -1,4 +1,5 @@
 *
 !.gitignore
-!hosts.txt
 !adblock.py
+!README.md
+!hosts.txt
