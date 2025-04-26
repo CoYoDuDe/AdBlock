@@ -182,6 +182,7 @@ logger.debug("Regex-Muster kompiliert")
 class HybridStorage:
     """Hybride Speicherstrategie für RAM- und Plattenbasierten Cache"""
     def __init__(self, db_path: str):
+        logger.debug(f"Initializing HybridStorage with db_path: {db_path}")
         if os.path.exists(db_path):
             try:
                 os.remove(db_path)
@@ -189,6 +190,7 @@ class HybridStorage:
             except Exception as e:
                 logger.warning(f"Fehler beim Löschen der alten Datenbank {db_path}: {e}")
         self.db = shelve.open(db_path, writeback=True)
+        logger.debug(f"shelve-Datenbank {db_path} erfolgreich geöffnet")
         self.ram_storage = {}
         self.ram_threshold = self.calculate_threshold()
         self.use_ram = self.should_use_ram()
@@ -232,10 +234,14 @@ class HybridStorage:
             if self.use_ram:
                 self.ram_storage[key] = value
             else:
-                self.db[key] = value
-                self.db.sync()
+                try:
+                    self.db[key] = value
+                    self.db.sync()
+                except Exception as e:
+                    logger.error(f"Fehler beim Schreiben in shelve-Datenbank: key={key}, value_type={type(value)}, error={e}")
+                    raise
         except Exception as e:
-            logger.error(f"Fehler beim Schreiben in shelve-Datenbank: key={key}, value_type={type(value)}, error={e}")
+            logger.error(f"Kritischer Fehler beim Schreiben in HybridStorage: key={key}, value_type={type(value)}, error={e}")
             raise
 
     def __getitem__(self, key: str) -> Any:
@@ -320,40 +326,55 @@ class DomainTrie:
 
     def insert(self, domain: str):
         try:
+            logger.debug(f"Inserting domain: {domain}")
             if self.bloom_filter and domain in self.bloom_filter:
                 logger.debug(f"Domain {domain} bereits im Bloom-Filter")
                 return
             node = self.storage[self.root_key]
+            logger.debug(f"Root node retrieved: {node}")
             node_key = self.root_key
             parts = domain.split('.')[::-1]
             for i, part in enumerate(parts):
+                logger.debug(f"Processing part {part} at level {i}")
                 if part not in node.children:
                     new_key = f"{node_key}:{part}:{i}"
                     node.children[part] = new_key
                     self.storage[new_key] = TrieNode()
+                    logger.debug(f"Created new node with key {new_key}")
                 node_key = node.children[part]
                 node = self.storage[node_key]
+                logger.debug(f"Moved to node with key {node_key}")
             node.is_end = True
             self.storage[node_key] = node
             if self.bloom_filter:
                 self.bloom_filter.add(domain)
+            logger.debug(f"Domain {domain} successfully inserted")
         except Exception as e:
             logger.error(f"Fehler beim Einfügen der Domain {domain} in den Trie: {e}")
+            raise
 
     def has_parent(self, domain: str) -> bool:
         try:
+            logger.debug(f"Checking parent for domain: {domain}")
             if self.bloom_filter and domain not in self.bloom_filter:
+                logger.debug(f"Domain {domain} not in Bloom-Filter")
                 return False
             parts = domain.split('.')[::-1]
             node = self.storage[self.root_key]
+            logger.debug(f"Root node retrieved: {node}")
             node_key = self.root_key
             for i, part in enumerate(parts):
+                logger.debug(f"Checking part {part} at level {i}")
                 if part not in node.children:
+                    logger.debug(f"Part {part} not found in children")
                     return False
                 node_key = node.children[part]
                 node = self.storage[node_key]
+                logger.debug(f"Moved to node with key {node_key}")
                 if node.is_end and i < len(parts) - 1:
+                    logger.debug(f"Parent domain found at level {i}")
                     return True
+            logger.debug(f"No parent domain found for {domain}")
             return False
         except Exception as e:
             logger.error(f"Fehler beim Prüfen der Eltern-Domain für {domain}: {e}")
@@ -910,7 +931,7 @@ def categorize_list(url: str) -> str:
 # 8. RESSOURCENMANAGEMENT
 # =============================================================================
 
-async def select_best_dns_server(dns_servers: List[str], timeout: float = 1.0) -> List[str]:
+async def select_best_dns_server(dns_servers: List[str], timeout: float = 5.0) -> List[str]:
     """Wählt die besten DNS-Server basierend auf Latenz"""
     async def test_server(server: str) -> tuple[str, float]:
         try:
@@ -920,8 +941,8 @@ async def select_best_dns_server(dns_servers: List[str], timeout: float = 1.0) -
             latency = time.time() - start
             logger.debug(f"DNS-Server {server} Latenz: {latency:.2f}s")
             return server, latency
-        except Exception:
-            logger.debug(f"DNS-Server {server} nicht erreichbar")
+        except Exception as e:
+            logger.debug(f"DNS-Server {server} nicht erreichbar: {e}")
             return server, float('inf')
 
     try:
@@ -964,11 +985,17 @@ async def monitor_resources(cache_manager: CacheManager):
 async def check_network_latency() -> float:
     """Prüft die Netzwerklatenz zu einem DNS-Server"""
     try:
-        resolver = aiodns.DNSResolver(nameservers=[CONFIG['dns_servers'][0]], timeout=1.0)
+        resolver = aiodns.DNSResolver(nameservers=[CONFIG['dns_servers'][0]], timeout=5.0)
         start = time.time()
         await resolver.query("example.com", 'A')
-        return time.time() - start
-    except Exception:
+        latency = time.time() - start
+        logger.debug(f"Netzwerklatenz zu {CONFIG['dns_servers'][0]}: {latency:.2f}s")
+        return latency
+    except aiodns.error.DNSError as e:
+        logger.warning(f"DNS-Fehler bei Latenzprüfung: {e}")
+        return float('inf')
+    except Exception as e:
+        logger.warning(f"Unbekannter Fehler bei Latenzprüfung: {e}")
         return float('inf')
 
 def get_system_resources() -> tuple[int, int, int]:
@@ -1233,15 +1260,24 @@ def upload_to_github():
         if new_hash == old_hash:
             logger.info("Keine Änderungen an hosts.txt, überspringe Git-Upload")
             return
-        subprocess.run(['git', 'add', CONFIG['hosts_file']], check=True, cwd=SCRIPT_DIR)
+        result = subprocess.run(['git', 'status', '--porcelain', CONFIG['hosts_file']], capture_output=True, text=True, cwd=SCRIPT_DIR)
+        if not result.stdout.strip():
+            logger.info("Keine Änderungen an hosts.txt erkannt, überspringe Git-Upload")
+            return
+        subprocess.run(['git', 'add', CONFIG['hosts_file']], check=True, capture_output=True, text=True, cwd=SCRIPT_DIR)
         commit_msg = f"Update hosts.txt: {STATISTICS['reachable_domains']} Domains, {STATISTICS['unique_domains']} einzigartig"
-        subprocess.run(['git', 'commit', '-m', commit_msg], check=True, cwd=SCRIPT_DIR)
-        subprocess.run(['git', 'push', 'origin', CONFIG['github_branch']], check=True, cwd=SCRIPT_DIR)
+        result = subprocess.run(['git', 'commit', '-m', commit_msg], check=True, capture_output=True, text=True, cwd=SCRIPT_DIR)
+        logger.debug(f"Git commit Ausgabe: {result.stdout}")
+        result = subprocess.run(['git', 'push', 'origin', CONFIG['github_branch']], check=True, capture_output=True, text=True, cwd=SCRIPT_DIR)
+        logger.debug(f"Git push Ausgabe: {result.stdout}")
         logger.info("Hosts-Datei erfolgreich auf GitHub hochgeladen")
         with open(HOSTS_HASH_PATH, 'w', encoding='utf-8') as f:
             f.write(new_hash)
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Fehler beim Hochladen auf GitHub: {e}, stderr: {e.stderr}")
+        send_email("Warnung im AdBlock-Skript", f"Git-Upload fehlgeschlagen: {e}\nStderr: {e.stderr}")
     except Exception as e:
-        logger.warning(f"Fehler beim Hochladen auf GitHub: {e}")
+        logger.warning(f"Unbekannter Fehler beim Hochladen auf GitHub: {e}")
         send_email("Warnung im AdBlock-Skript", f"Git-Upload fehlgeschlagen: {e}")
 
 # =============================================================================
@@ -1253,7 +1289,7 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
     """Verarbeitet eine Blockliste und extrahiert Domains"""
     try:
         logger.debug(f"Verarbeite Liste: {url}")
-        async with session.get(url, timeout=10) as response:
+        async with session.get(url, timeout=30) as response:
             if response.status == 404:
                 logger.error(f"Liste {url} nicht gefunden (404)")
                 STATISTICS['failed_lists'] += 1
@@ -1288,6 +1324,7 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
                 free_memory = psutil.virtual_memory().available
                 trie.storage.update_threshold()
                 _, batch_size, _ = get_system_resources()
+                batch_size = min(batch_size, 50)  # Begrenze Batch-Größe auf 50
                 if free_memory < 50 * 1024 * 1024:
                     logger.warning(f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, pausiere Verarbeitung")
                     await asyncio.sleep(5)
@@ -1298,7 +1335,7 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
                 trie.insert(domain)
                 batch.append(domain)
                 domain_count += 1
-                if len(batch) >= min(batch_size, 100):  # Begrenze Trie-Batch auf 100
+                if len(batch) >= batch_size:
                     for d in batch:
                         if CONFIG['remove_redundant_subdomains'] and trie.has_parent(d):
                             subdomain_count += 1
@@ -1313,6 +1350,8 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
                 if domain_count % 1000 == 0:
                     memory = psutil.Process().memory_info().rss / (1024 * 1024)
                     logger.debug(f"Verarbeite {url}: {domain_count} Domains, Speicher: {memory:.2f} MB")
+                    trie.flush()  # Zusätzliches Flushen bei großen Listen
+                    gc.collect()
             if batch:
                 for d in batch:
                     if CONFIG['remove_redundant_subdomains'] and trie.has_parent(d):
@@ -1328,8 +1367,16 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
         gc.collect()
         logger.info(f"Extrahierte {domain_count} Domains aus {url}, {unique_count} einzigartig, {duplicate_count} Duplikate")
         return domain_count, unique_count, subdomain_count
+    except aiohttp.ClientError as e:
+        logger.error(f"HTTP-Fehler beim Verarbeiten der Liste {url}: {e}")
+        STATISTICS['failed_lists'] += 1
+        return 0, 0, 0
+    except asyncio.TimeoutError as e:
+        logger.error(f"Timeout beim Verarbeiten der Liste {url}: {e}")
+        STATISTICS['failed_lists'] += 1
+        return 0, 0, 0
     except Exception as e:
-        logger.error(f"Fehler beim Verarbeiten der Liste {url}: {e}")
+        logger.error(f"Unbekannter Fehler beim Verarbeiten der Liste {url}: {e}")
         STATISTICS['failed_lists'] += 1
         return 0, 0, 0
 
@@ -1411,9 +1458,17 @@ async def main():
             logger.error("Keine Quell-URLs in hosts_sources.conf gefunden")
             send_email("Fehler im AdBlock-Skript", "Keine Quell-URLs in hosts_sources.conf gefunden")
             if cache_flush_task:
-                await cache_flush_task.cancel()
+                cache_flush_task.cancel()
+                try:
+                    await cache_flush_task
+                except asyncio.CancelledError:
+                    logger.debug("cache_flush_task erfolgreich abgebrochen")
             if resource_monitor_task:
-                await resource_monitor_task.cancel()
+                resource_monitor_task.cancel()
+                try:
+                    await resource_monitor_task
+                except asyncio.CancelledError:
+                    logger.debug("resource_monitor_task erfolgreich abgebrochen")
             return
         logger.debug(f"Geladene Quell-URLs: {len(sources)}")
         logger.debug("Lade Whitelist und Blacklist...")
@@ -1457,9 +1512,17 @@ async def main():
             logger.error("Keine gültigen Domains gefunden")
             send_email("Fehler im AdBlock-Skript", "Keine gültigen Domains gefunden")
             if cache_flush_task:
-                await cache_flush_task.cancel()
+                cache_flush_task.cancel()
+                try:
+                    await cache_flush_task
+                except asyncio.CancelledError:
+                    logger.debug("cache_flush_task erfolgreich abgebrochen")
             if resource_monitor_task:
-                await resource_monitor_task.cancel()
+                resource_monitor_task.cancel()
+                try:
+                    await resource_monitor_task
+                except asyncio.CancelledError:
+                    logger.debug("resource_monitor_task erfolgreich abgebrochen")
             return
         STATISTICS['total_domains'] = sum(counts['total'] for counts in url_counts.values())
         STATISTICS['unique_domains'] = sum(counts['unique'] for counts in url_counts.values())
@@ -1544,12 +1607,6 @@ async def main():
                 await f.write('\n'.join(unreachable_domains))
         if CONFIG['github_upload']:
             upload_to_github()
-        if cache_flush_task:
-            await cache_flush_task.cancel()
-        if resource_monitor_task:
-            await resource_monitor_task.cancel()
-        async with cache_flush_lock:
-            cache_manager.save_domain_cache()
         safe_save(os.path.join(TMP_DIR, 'statistics.json'), STATISTICS, is_json=True)
         export_statistics_csv()
         export_prometheus_metrics(start_time)
@@ -1591,10 +1648,33 @@ Empfehlungen:
         logger.error(f"Kritischer Fehler in der Hauptfunktion: {e}")
         send_email("Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}")
         if cache_flush_task:
-            await cache_flush_task.cancel()
+            cache_flush_task.cancel()
+            try:
+                await cache_flush_task
+            except asyncio.CancelledError:
+                logger.debug("cache_flush_task erfolgreich abgebrochen")
         if resource_monitor_task:
-            await resource_monitor_task.cancel()
+            resource_monitor_task.cancel()
+            try:
+                await resource_monitor_task
+            except asyncio.CancelledError:
+                logger.debug("resource_monitor_task erfolgreich abgebrochen")
         sys.exit(1)
+    finally:
+        if cache_flush_task:
+            cache_flush_task.cancel()
+            try:
+                await cache_flush_task
+            except asyncio.CancelledError:
+                logger.debug("cache_flush_task erfolgreich abgebrochen")
+        if resource_monitor_task:
+            resource_monitor_task.cancel()
+            try:
+                await resource_monitor_task
+            except asyncio.CancelledError:
+                logger.debug("resource_monitor_task erfolgreich abgebrochen")
+        async with cache_flush_lock:
+            cache_manager.save_domain_cache()
 
 if __name__ == "__main__":
     try:
