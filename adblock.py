@@ -31,7 +31,7 @@ import zlib
 import backoff
 from urllib.parse import quote
 import aiofiles
-from logging.handlers import RotatingFileHandler
+from logging import FileHandler
 from enum import Enum
 import idna
 from pybloom_live import ScalableBloomFilter
@@ -58,11 +58,15 @@ cache_manager = None
 global_mode = SystemMode.NORMAL
 
 logged_messages = set()
+console_logged_messages = set()
 
-def log_once(level, message):
+def log_once(level, message, console=True):
     if message not in logged_messages:
         logger.log(level, message)
         logged_messages.add(message)
+    if console and message not in console_logged_messages:
+        print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {logging.getLevelName(level)} - {message}")
+        console_logged_messages.add(message)
 
 STATISTICS = {
     "total_domains": 0,
@@ -301,13 +305,12 @@ class TrieNode:
 
 class DomainTrie:
     def __init__(self, url: str):
-        # Erstelle eindeutigen DB-Pfad basierend auf URL-Hash
         url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
         db_path = os.path.join(TMP_DIR, f'trie_cache_{url_hash}.db')
         logger.debug(f"Initializing DomainTrie with db_path: {db_path} for URL: {url}")
         self.storage = HybridStorage(db_path)
         self.root_key = 'root'
-        if CONFIG['use_bloom_filter']:
+        if CONFIG['use_bloom_filter'] and global_mode != SystemMode.EMERGENCY:
             self.bloom_filter = ScalableBloomFilter(
                 initial_capacity=CONFIG['bloom_filter_capacity'],
                 error_rate=CONFIG['bloom_filter_error_rate']
@@ -449,7 +452,7 @@ class CacheManager:
             dynamic_size = max(2, min(100000, estimated_cache_size))
             if free_memory < CONFIG['resource_thresholds']['low_memory_mb'] * 1024 * 1024:
                 dynamic_size = 2
-                logger.warning("Low-Memory-Modus aktiviert: Cache-Größe auf 2 reduziert")
+                log_once(logging.WARNING, "Low-Memory-Modus aktiviert: Cache-Größe auf 2 reduziert", console=True)
             logger.debug(f"Dynamische Cache-Größe berechnet: {dynamic_size} (freier RAM: {free_memory/(1024*1024):.2f} MB)")
             return dynamic_size
         except Exception as e:
@@ -496,7 +499,7 @@ class CacheManager:
                 free_memory = psutil.virtual_memory().available / (1024 * 1024)
                 cpu_usage = psutil.cpu_percent(interval=0.1)
                 if free_memory < 50 or psutil.virtual_memory().percent > 90:
-                    log_once(logging.WARNING, f"Kritischer Speicherstand: {free_memory:.2f} MB frei, Auslastung: {psutil.virtual_memory().percent}%, reduziere Cache")
+                    log_once(logging.WARNING, f"Kritischer Speicherstand: {free_memory:.2f} MB frei, Auslastung: {psutil.virtual_memory().percent}%, reduziere Cache", console=True)
                     self.current_cache_size = max(2, self.current_cache_size // 2)
                     self.adjust_cache_size()
                     self.domain_cache.use_ram = True
@@ -504,7 +507,7 @@ class CacheManager:
                     self.adjust_cache_size()
                     self.domain_cache.use_ram = True
                 if cpu_usage > 90:
-                    log_once(logging.WARNING, f"Hohe CPU-Auslastung: {cpu_usage}%, reduziere parallele Aufgaben")
+                    log_once(logging.WARNING, f"Hohe CPU-Auslastung: {cpu_usage}%, reduziere parallele Aufgaben", console=True)
                 logger.debug(f"Speicherverbrauch: {memory:.2f} MB, CPU: {cpu_usage}%, Cache-Größe: {self.current_cache_size}, RAM-Speicher: {self.domain_cache.use_ram}")
                 if time.time() - self.last_flush > self.flush_interval:
                     async with cache_flush_lock:
@@ -587,7 +590,6 @@ def cleanup_temp_files(cache_manager: CacheManager):
             if file.endswith('.tmp') or file.endswith('.filtered') or file.startswith('trie_cache_'):
                 file_path = os.path.join(TMP_DIR, file)
                 url = file.replace('.tmp', '').replace('.filtered', '').replace('trie_cache_', '').replace('__', '/').replace('_', '://')
-                # Überprüfe, ob die Datei zu einer aktiven URL gehört und nicht veraltet ist
                 if file.startswith('trie_cache_'):
                     if url in list_cache:
                         last_checked = datetime.fromisoformat(list_cache[url]['last_checked'])
@@ -702,7 +704,7 @@ def setup_logging():
         
         logger.handlers.clear()
         
-        handler = RotatingFileHandler(CONFIG['log_file'], maxBytes=10*1024*1024, backupCount=5)
+        handler = logging.FileHandler(CONFIG['log_file'], mode='w')
         if CONFIG.get('log_format') == 'json':
             handler.setFormatter(logging.Formatter(
                 '{"time": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s", "operation": "%(funcName)s"}'
@@ -713,7 +715,7 @@ def setup_logging():
         logger.addHandler(handler)
         
         stream_handler = logging.StreamHandler()
-        stream_handler.setLevel(logging.INFO if global_mode != SystemMode.EMERGENCY else logging.ERROR)
+        stream_handler.setLevel(logging.INFO)
         stream_handler.setFormatter(handler.formatter)
         logger.addHandler(stream_handler)
         
@@ -1012,12 +1014,13 @@ async def monitor_resources(cache_manager: CacheManager):
         return sum(values) / len(values) if values else 0.0
 
     def print_system_status():
-        print(f"Systemzustandsübersicht:")
-        print(f"- Aktueller Modus: {resource_state['mode'].value}")
-        print(f"- Freier RAM: {avg_memory:.2f} MB")
-        print(f"- CPU-Last: {avg_cpu:.1f}%")
-        print(f"- DNS-Latenz: {avg_latency:.2f}s")
-        print(f"- Angepasste Batch-Größe: {batch_size} Domains")
+        log_once(logging.INFO, 
+            f"Systemzustandsübersicht:\n"
+            f"- Aktueller Modus: {resource_state['mode'].value}\n"
+            f"- Freier RAM: {avg_memory:.2f} MB\n"
+            f"- CPU-Last: {avg_cpu:.1f}%\n"
+            f"- DNS-Latenz: {avg_latency:.2f}s\n"
+            f"- Angepasste Batch-Größe: {batch_size} Domains", console=True)
 
     while True:
         try:
@@ -1043,41 +1046,41 @@ async def monitor_resources(cache_manager: CacheManager):
                 new_mode = SystemMode.NORMAL
 
             if new_mode != resource_state["mode"]:
-                logger.info(f"Betriebsmodus gewechselt: {resource_state['mode'].value} → {new_mode.value}")
+                log_once(logging.INFO, f"Betriebsmodus gewechselt: {resource_state['mode'].value} → {new_mode.value}", console=True)
                 resource_state["mode"] = new_mode
                 global_mode = new_mode
 
             if avg_memory < CONFIG['resource_thresholds']['low_memory_mb']:
                 consecutive_violations["low_memory"] += 1
                 if consecutive_violations["low_memory"] >= CONFIG['resource_thresholds']['consecutive_violations'] and not resource_state["low_memory"]:
-                    logger.warning(f"Wenig RAM verfügbar: Durchschnitt {avg_memory:.2f} MB, Batch-Größe: {batch_size}, DNS-Anfragen: {max_concurrent_dns}")
+                    log_once(logging.WARNING, f"Wenig RAM verfügbar: Durchschnitt {avg_memory:.2f} MB, Batch-Größe: {batch_size}, DNS-Anfragen: {max_concurrent_dns}", console=True)
                     resource_state["low_memory"] = True
             else:
                 consecutive_violations["low_memory"] = 0
                 if resource_state["low_memory"]:
-                    logger.info(f"RAM wieder ausreichend verfügbar: Durchschnitt {avg_memory:.2f} MB frei")
+                    log_once(logging.INFO, f"RAM wieder ausreichend verfügbar: Durchschnitt {avg_memory:.2f} MB frei", console=True)
                     resource_state["low_memory"] = False
 
             if avg_cpu > CONFIG['resource_thresholds']['high_cpu_percent']:
                 consecutive_violations["high_cpu"] += 1
                 if consecutive_violations["high_cpu"] >= CONFIG['resource_thresholds']['consecutive_violations'] and not resource_state["high_cpu"]:
-                    logger.warning(f"Hohe CPU-Auslastung erkannt: Durchschnitt {avg_cpu:.1f}%, reduziere parallele Jobs")
+                    log_once(logging.WARNING, f"Hohe CPU-Auslastung erkannt: Durchschnitt {avg_cpu:.1f}%, reduziere parallele Jobs", console=True)
                     resource_state["high_cpu"] = True
             else:
                 consecutive_violations["high_cpu"] = 0
                 if resource_state["high_cpu"]:
-                    logger.info(f"CPU-Auslastung wieder normal: Durchschnitt {avg_cpu:.1f}%")
+                    log_once(logging.INFO, f"CPU-Auslastung wieder normal: Durchschnitt {avg_cpu:.1f}%", console=True)
                     resource_state["high_cpu"] = False
 
             if avg_latency > CONFIG['resource_thresholds']['high_latency_s']:
                 consecutive_violations["high_latency"] += 1
                 if consecutive_violations["high_latency"] >= CONFIG['resource_thresholds']['consecutive_violations'] and not resource_state["high_latency"]:
-                    logger.warning(f"Hohe Netzwerklatenz erkannt: Durchschnitt {avg_latency:.2f}s, DNS-Anfragen reduziert")
+                    log_once(logging.WARNING, f"Hohe Netzwerklatenz erkannt: Durchschnitt {avg_latency:.2f}s, DNS-Anfragen reduziert", console=True)
                     resource_state["high_latency"] = True
             else:
                 consecutive_violations["high_latency"] = 0
                 if resource_state["high_latency"]:
-                    logger.info(f"Netzwerklatenz wieder normal: Durchschnitt {avg_latency:.2f}s")
+                    log_once(logging.INFO, f"Netzwerklatenz wieder normal: Durchschnitt {avg_latency:.2f}s", console=True)
                     resource_state["high_latency"] = False
 
             cache_manager.adjust_cache_size()
@@ -1126,16 +1129,16 @@ def get_system_resources() -> tuple[int, int, int]:
             max_jobs = 1
             batch_size = 5
             max_concurrent_dns = 5
-            log_once(logging.WARNING, f"Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5")
+            log_once(logging.WARNING, f"Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5", console=True)
         elif global_mode == SystemMode.LOW_MEMORY:
-            max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 2)
-            batch_size = max(10, min(50, int(free_memory / (800 * 1024))))
-            max_concurrent_dns = max(5, min(10, int(free_memory / (2048 * 1024))))
-            log_once(logging.WARNING, f"Low-Memory-Modus: Batch-Größe={batch_size}, Jobs={max_jobs}, DNS-Anfragen={max_concurrent_dns}")
+            max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 4)
+            batch_size = max(5, min(20, int(free_memory / (1000 * 1024))))
+            max_concurrent_dns = max(5, min(8, int(free_memory / (2048 * 1024))))
+            log_once(logging.WARNING, f"Low-Memory-Modus: Batch-Größe={batch_size}, Jobs={max_jobs}, DNS-Anfragen={max_concurrent_dns}", console=True)
         else:
-            max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)))
-            batch_size = max(10, min(200, int(free_memory / (400 * 1024))))
-            max_concurrent_dns = max(5, min(50, int(free_memory / (1024 * 1024))))
+            max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 2)
+            batch_size = max(10, min(50, int(free_memory / (500 * 1024))))
+            max_concurrent_dns = max(5, min(20, int(free_memory / (1024 * 1024))))
         
         logger.debug(f"CPU-Last: {cpu_load:.2f}, Kerne: {cpu_cores}, Speicher: {free_memory/(1024*1024):.2f} MB, Modus: {global_mode.value}")
         logger.debug(f"Empfohlene Jobs: {max_jobs}, Batch-Größe: {batch_size}, DNS-Anfragen: {max_concurrent_dns}")
@@ -1270,71 +1273,47 @@ def evaluate_lists(url_counts: Dict[str, Dict], total_domains: int):
 
 def setup_git() -> bool:
     try:
-        subprocess.run(['git', '--version'], check=True)
+        # Prüfe, ob git installiert ist
+        subprocess.run(['git', '--version'], check=True, capture_output=True, text=True)
+        logger.debug("Git ist installiert")
+
+        # Prüfe, ob das Repository existiert
         git_dir = os.path.join(SCRIPT_DIR, '.git')
-        if os.path.exists(git_dir):
-            result = subprocess.run(['git', 'remote', '-v'], capture_output=True, text=True, cwd=SCRIPT_DIR)
-            if CONFIG['github_repo'] not in result.stdout:
-                subprocess.run(['git', 'remote', 'add', 'origin', CONFIG['github_repo']], check=True, cwd=SCRIPT_DIR)
-                logger.debug(f"Git-Remote hinzugefügt: {CONFIG['github_repo']}")
-            branch_result = subprocess.run(['git', 'branch', '--list', CONFIG['github_branch']], capture_output=True, text=True, cwd=SCRIPT_DIR)
-            if CONFIG['github_branch'] in branch_result.stdout:
-                subprocess.run(['git', 'checkout', CONFIG['github_branch']], check=True, cwd=SCRIPT_DIR)
-                logger.debug(f"Zu bestehendem Branch {CONFIG['github_branch']} gewechselt")
-            else:
-                subprocess.run(['git', 'checkout', '-b', CONFIG['github_branch']], check=True, cwd=SCRIPT_DIR)
-                logger.debug(f"Neuer Branch {CONFIG['github_branch']} erstellt")
-        else:
-            subprocess.run(['git', 'init'], check=True, cwd=SCRIPT_DIR)
-            subprocess.run(['git', 'checkout', '-b', CONFIG['github_branch']], check=True, cwd=SCRIPT_DIR)
+        if not os.path.exists(git_dir):
+            logger.error("Git-Repository nicht gefunden. Bitte initialisieren Sie das Repository manuell.")
+            return False
+
+        # Prüfe, ob das Remote-Repository korrekt konfiguriert ist
+        result = subprocess.run(['git', 'remote', '-v'], capture_output=True, text=True, cwd=SCRIPT_DIR)
+        if CONFIG['github_repo'] not in result.stdout:
+            logger.debug(f"Füge Remote-Repository hinzu: {CONFIG['github_repo']}")
             subprocess.run(['git', 'remote', 'add', 'origin', CONFIG['github_repo']], check=True, cwd=SCRIPT_DIR)
-            logger.debug("Git-Repository initialisiert")
+        else:
+            logger.debug("Remote-Repository bereits konfiguriert")
 
-        ssh_key_path = os.path.expanduser('~/.ssh/adblock_rsa')
-        if not os.path.exists(ssh_key_path):
-            subprocess.run(['ssh-keygen', '-t', 'rsa', '-b', '4096', '-C', CONFIG['git_email'], '-N', '', '-f', ssh_key_path], check=True)
-            pub_key_path = f"{ssh_key_path}.pub"
-            if not os.path.exists(pub_key_path):
-                raise FileNotFoundError(f"Öffentlicher Schlüssel {pub_key_path} nicht gefunden")
-            with open(pub_key_path, 'r') as f:
-                print(f"SSH-Schlüssel: {f.read()}\nFügen Sie diesen zu GitHub hinzu.")
-            logger.info("SSH-Schlüssel erfolgreich generiert")
-            exit(0)
+        # Prüfe, ob der Branch existiert
+        branch_result = subprocess.run(['git', 'branch', '--list', CONFIG['github_branch']], capture_output=True, text=True, cwd=SCRIPT_DIR)
+        if CONFIG['github_branch'] not in branch_result.stdout:
+            logger.debug(f"Erstelle neuen Branch: {CONFIG['github_branch']}")
+            subprocess.run(['git', 'checkout', '-b', CONFIG['github_branch']], check=True, cwd=SCRIPT_DIR)
+        else:
+            logger.debug(f"Wechsel zu Branch: {CONFIG['github_branch']}")
+            subprocess.run(['git', 'checkout', CONFIG['github_branch']], check=True, cwd=SCRIPT_DIR)
 
-        ssh_config_path = os.path.expanduser('~/.ssh/config')
-        with open(ssh_config_path, 'a') as f:
-            f.write(
-                "\nHost github.com\n"
-                "  HostName github.com\n"
-                "  User git\n"
-                f"  IdentityFile {ssh_key_path}\n"
-                "  IdentitiesOnly yes\n"
-            )
-        logger.info(f"SSH-Konfigurationsdatei aktualisiert: {ssh_config_path}")
-
-        try:
-            subprocess.run(['ssh-add', ssh_key_path], check=True)
-            logger.debug(f"SSH-Schlüssel {ssh_key_path} erfolgreich hinzugefügt")
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Fehler beim Hinzufügen des SSH-Schlüssels: {e}")
-            subprocess.run(['pkill', 'ssh-agent'], check=False)
-            process = subprocess.run('eval "$(ssh-agent -s)"', shell=True, check=True, capture_output=True, text=True)
-            logger.debug(f"Neuer SSH-Agent gestartet: {process.stdout}")
-            subprocess.run(['ssh-add', ssh_key_path], check=True)
-            logger.debug(f"SSH-Schlüssel {ssh_key_path} nach Agent-Neustart hinzugefügt")
-
+        # Teste die SSH-Verbindung zu GitHub
         result = subprocess.run(['ssh', '-T', 'git@github.com'], capture_output=True, text=True)
         if "successfully authenticated" in result.stderr or result.returncode == 0:
             logger.debug("SSH-Verbindung zu GitHub erfolgreich")
+            return True
         else:
             logger.error(f"SSH-Verbindung zu GitHub fehlgeschlagen: {result.stderr}")
             return False
 
-        logger.debug("Git und SSH erfolgreich eingerichtet")
-        return True
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Fehler bei der Git-Konfiguration: {e}")
+        return False
     except Exception as e:
-        logger.warning(f"Fehler bei Git-Konfiguration: {e}")
-        send_email("Warnung im AdBlock-Skript", f"Git-Konfiguration fehlgeschlagen: {e}")
+        logger.warning(f"Unbekannter Fehler bei der Git-Konfiguration: {e}")
         return False
 
 def upload_to_github():
@@ -1383,7 +1362,7 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
     """Verarbeitet eine Blockliste und extrahiert Domains"""
     try:
         if global_mode == SystemMode.EMERGENCY:
-            log_once(logging.WARNING, f"Emergency-Mode: Liste {url} wird übersprungen, um Ressourcen zu sparen")
+            log_once(logging.WARNING, f"Emergency-Mode: Liste {url} wird übersprungen, um Ressourcen zu sparen", console=True)
             return 0, 0, 0
 
         logger.debug(f"Verarbeite Liste: {url}")
@@ -1427,9 +1406,9 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
                 free_memory = psutil.virtual_memory().available
                 trie.storage.update_threshold()
                 _, batch_size, _ = get_system_resources()
-                batch_size = min(batch_size, 20 if global_mode == SystemMode.EMERGENCY else 50)
+                batch_size = min(batch_size, 10 if global_mode == SystemMode.EMERGENCY else 20)
                 if free_memory < CONFIG['resource_thresholds']['emergency_memory_mb'] * 1024 * 1024:
-                    log_once(logging.WARNING, f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, pausiere Verarbeitung")
+                    log_once(logging.WARNING, f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, pausiere Verarbeitung", console=True)
                     await asyncio.sleep(5)
                 if domain in seen_domains:
                     duplicate_count += 1
@@ -1505,10 +1484,10 @@ async def main():
         logger.debug("Konfiguration geladen")
 
         if free_memory < CONFIG['resource_thresholds']['emergency_memory_mb']:
-            log_once(logging.WARNING, f"Kritischer Speicherstand vor Start: {free_memory:.2f} MB frei, aktiviere Emergency-Mode")
+            log_once(logging.WARNING, f"Kritischer Speicherstand vor Start: {free_memory:.2f} MB frei, aktiviere Emergency-Mode", console=True)
             global_mode = SystemMode.EMERGENCY
         elif free_memory < CONFIG['resource_thresholds']['low_memory_mb']:
-            log_once(logging.WARNING, f"Niedriger Speicherstand vor Start: {free_memory:.2f} MB frei, aktiviere Low-Memory-Mode")
+            log_once(logging.WARNING, f"Niedriger Speicherstand vor Start: {free_memory:.2f} MB frei, aktiviere Low-Memory-Mode", console=True)
             global_mode = SystemMode.LOW_MEMORY
         else:
             global_mode = SystemMode.NORMAL
@@ -1545,6 +1524,9 @@ async def main():
 
         if CONFIG['github_upload']:
             logger.debug("Git-Upload aktiviert, verwende manuelle Git-Konfiguration")
+            if not setup_git():
+                logger.warning("Git-Setup fehlgeschlagen, deaktiviere Git-Upload")
+                CONFIG['github_upload'] = False
         else:
             logger.debug("Git-Upload deaktiviert")
 
@@ -1631,7 +1613,7 @@ async def main():
                                 logger.debug(f"Speicherverbrauch nach Batch ({url}): {memory:.2f} MB")
                                 gc.collect()
                                 if free_memory < CONFIG['resource_thresholds']['emergency_memory_mb'] * 1024 * 1024:
-                                    log_once(logging.WARNING, f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, reduziere Cache")
+                                    log_once(logging.WARNING, f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, reduziere Cache", console=True)
                                     cache_manager.current_cache_size = max(2, cache_manager.current_cache_size // 2)
                                     cache_manager.adjust_cache_size()
                                     cache_manager.domain_cache.use_ram = False
