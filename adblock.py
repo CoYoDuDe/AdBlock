@@ -1,83 +1,51 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# AdBlock-Skript zur Verarbeitung von Blocklisten, DNS-Validierung und Hosts-Datei-Erstellung
-# Optimiert für dynamische Ressourcennutzung, asynchrone Operationen und Speichereffizienz
-
 import logging
 import os
 import sys
+import gc
+import psutil
+import time
+import subprocess
+import hashlib
+import requests
+import re
+import json
+from collections import defaultdict, deque
+import asyncio
+import aiodns
+from datetime import datetime, timedelta
+from threading import Lock
+import aiohttp
+import smtplib
+from email.mime.text import MIMEText
+import sqlite3
+import socket
+import shelve
+from typing import Dict, List, Optional, Iterator, Any
+from dataclasses import dataclass
+import csv
+import pickle
+import zlib
+import backoff
+from urllib.parse import quote
+import aiofiles
+from logging.handlers import RotatingFileHandler
+from enum import Enum
+import idna
+from pybloom_live import ScalableBloomFilter
 
-# Frühes Logging direkt in /var/log/adblock.log
-LOG_FILE = '/var/log/adblock.log'
-LOG_DIR = os.path.dirname(LOG_FILE)
-if LOG_DIR and not os.path.exists(LOG_DIR):
-    os.makedirs(LOG_DIR, exist_ok=True)
-if not os.access(LOG_DIR, os.W_OK):
-    print(f"Keine Schreibrechte für {LOG_DIR}, beende Skript")
-    sys.exit(1)
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-logger.debug("Skript beginnt")
-
-# Prüfe, ob alle benötigten Module verfügbar sind
-try:
-    import logging
-    import os
-    import sys
-    import gc
-    import psutil
-    import time
-    import subprocess
-    import hashlib
-    import requests
-    import re
-    import json
-    from collections import defaultdict
-    import asyncio
-    import aiodns
-    from datetime import datetime, timedelta
-    from threading import Lock
-    import aiohttp
-    import smtplib
-    from email.mime.text import MIMEText
-    import sqlite3
-    import socket
-    import shelve
-    from typing import Dict, List, Optional, Iterator, Any
-    from dataclasses import dataclass
-    import csv
-    import pickle
-    import zlib
-    import backoff
-    from urllib.parse import quote
-    import aiofiles
-    from logging.handlers import RotatingFileHandler
-    from bloom_filter import BloomFilter
-except ImportError as e:
-    logger.error(f"Fehler beim Importieren der Module: {e}")
-    print(f"Fehler beim Importieren der Module: {e}")
-    print(f"Bitte installiere die benötigten Abhängigkeiten mit:")
-    print(f"sudo pip3 install -r {os.path.join(os.path.dirname(os.path.realpath(__file__)), 'requirements.txt')} --break-system-packages")
-    sys.exit(1)
-
-# =============================================================================
-# 1. GLOBALE KONFIGURATION UND INITIALISIERUNG
-# =============================================================================
+class SystemMode(Enum):
+    NORMAL = "normal"
+    LOW_MEMORY = "low_memory"
+    EMERGENCY = "emergency"
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 TMP_DIR = os.path.join(SCRIPT_DIR, 'tmp')
 DB_PATH = os.path.join(TMP_DIR, 'adblock_cache.db')
 HOSTS_HASH_PATH = os.path.join(TMP_DIR, 'hosts_hash.txt')
 TRIE_CACHE_PATH = os.path.join(TMP_DIR, 'trie_cache.pkl')
-TRIE_DB_PATH = os.path.join(TMP_DIR, 'trie_cache.db')
 REACHABLE_FILE = os.path.join(TMP_DIR, 'reachable.txt')
 UNREACHABLE_FILE = os.path.join(TMP_DIR, 'unreachable.txt')
 
@@ -85,7 +53,16 @@ CONFIG = {}
 DNS_CACHE = {}
 dns_cache_lock = Lock()
 cache_flush_lock = asyncio.Lock()
-MAX_DNS_CACHE_SIZE = 10000  # Begrenze DNS-Cache auf 10.000 Einträge
+MAX_DNS_CACHE_SIZE = 10000
+cache_manager = None
+global_mode = SystemMode.NORMAL
+
+logged_messages = set()
+
+def log_once(level, message):
+    if message not in logged_messages:
+        logger.log(level, message)
+        logged_messages.add(message)
 
 STATISTICS = {
     "total_domains": 0,
@@ -109,7 +86,8 @@ STATISTICS = {
     }),
     "list_recommendations": [],
     "error_message": "",
-    "run_failed": False
+    "run_failed": False,
+    "domain_sources": {}
 }
 
 DEFAULT_CONFIG = {
@@ -163,33 +141,36 @@ DEFAULT_CONFIG = {
         "unknown": 0.8
     },
     "use_bloom_filter": True,
-    "bloom_filter_capacity": 1000000,
-    "bloom_filter_error_rate": 0.01
+    "bloom_filter_capacity": 10000000,
+    "bloom_filter_error_rate": 0.001,
+    "http_timeout": 60,
+    "resource_thresholds": {
+        "low_memory_mb": 150,
+        "emergency_memory_mb": 50,
+        "high_cpu_percent": 90,
+        "high_latency_s": 5.0,
+        "moving_average_window": 5,
+        "consecutive_violations": 2
+    }
 }
 
 LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
-logger.debug("Globale Variablen initialisiert")
+logger = logging.getLogger(__name__)
 
-# Cache für Regex
-DOMAIN_PATTERN = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1|\S+:+\S+)\s+(\S+)|^\s*(\S+)$')
-DOMAIN_VALIDATOR = re.compile(r'^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})+$')
-logger.debug("Regex-Muster kompiliert")
-
-# =============================================================================
-# 2. HYBRIDE SPEICHERSTRATEGIE
-# =============================================================================
+DOMAIN_PATTERN = re.compile(r'^(?:0\.0\.0\.0|127\.0\.0\.1|::1|[0-9a-fA-F:]+)\s+(\S+)|^\s*(\S+)|^\|\|([^\^]+)\^$')
+DOMAIN_VALIDATOR = re.compile(r'^(?!-|\.)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$')
 
 class HybridStorage:
-    """Hybride Speicherstrategie für RAM- und Plattenbasierten Cache"""
     def __init__(self, db_path: str):
         logger.debug(f"Initializing HybridStorage with db_path: {db_path}")
+        self.db_path = db_path
         if os.path.exists(db_path):
             try:
                 os.remove(db_path)
                 logger.debug(f"Alte Datenbank {db_path} gelöscht")
             except Exception as e:
                 logger.warning(f"Fehler beim Löschen der alten Datenbank {db_path}: {e}")
-        self.db = shelve.open(db_path, writeback=True)
+        self.db = shelve.open(db_path, protocol=3, writeback=False)
         logger.debug(f"shelve-Datenbank {db_path} erfolgreich geöffnet")
         self.ram_storage = {}
         self.ram_threshold = self.calculate_threshold()
@@ -217,10 +198,10 @@ class HybridStorage:
         try:
             free_memory = psutil.virtual_memory().available
             logger.debug(f"Freier RAM: {free_memory/(1024*1024):.2f} MB, Schwellwert: {self.ram_threshold/(1024*1024):.2f} MB")
-            return free_memory > self.ram_threshold
+            return free_memory > self.ram_threshold or free_memory < 50 * 1024 * 1024 or global_mode == SystemMode.EMERGENCY
         except Exception as e:
-            logger.warning(f"Fehler beim Überprüfen des freien RAM: {e}, verwende plattenbasierten Speicher")
-            return False
+            logger.warning(f"Fehler beim Überprüfen des freien RAM: {e}, verwende RAM-Speicher")
+            return True
 
     def flush_to_disk(self):
         if self.use_ram:
@@ -229,32 +210,48 @@ class HybridStorage:
             self.db.sync()
             logger.debug("RAM-Daten auf Platte geschrieben")
 
+    def reset_if_corrupt(self):
+        try:
+            if not hasattr(self, 'db_path') or not self.db_path:
+                logger.error("db_path nicht definiert, kann Datenbank nicht zurücksetzen")
+                raise ValueError("db_path nicht initialisiert")
+            self.db.close()
+            if os.path.exists(self.db_path):
+                os.remove(self.db_path)
+                logger.warning(f"Datenbank {self.db_path} zurückgesetzt wegen Korruption")
+            self.db = shelve.open(self.db_path, protocol=3, writeback=False)
+            self.ram_storage.clear()
+            logger.debug(f"shelve-Datenbank {self.db_path} neu initialisiert")
+        except Exception as e:
+            logger.error(f"Fehler beim Zurücksetzen der Datenbank {self.db_path}: {e}")
+            raise
+
     def __setitem__(self, key: str, value: Any):
         try:
+            key = str(key)
             if self.use_ram:
                 self.ram_storage[key] = value
             else:
-                try:
-                    self.db[key] = value
-                    self.db.sync()
-                except Exception as e:
-                    logger.error(f"Fehler beim Schreiben in shelve-Datenbank: key={key}, value_type={type(value)}, error={e}")
-                    raise
+                self.db[key] = value
+                self.db.sync()
         except Exception as e:
             logger.error(f"Kritischer Fehler beim Schreiben in HybridStorage: key={key}, value_type={type(value)}, error={e}")
             raise
 
     def __getitem__(self, key: str) -> Any:
+        key = str(key)
         if self.use_ram:
             return self.ram_storage[key]
         return self.db[key]
 
     def __contains__(self, key: str) -> bool:
+        key = str(key)
         if self.use_ram:
             return key in self.ram_storage
         return key in self.db
 
     def __delitem__(self, key: str):
+        key = str(key)
         if self.use_ram:
             del self.ram_storage[key]
         else:
@@ -277,7 +274,7 @@ class HybridStorage:
             self.ram_storage.clear()
         else:
             self.db.clear()
-        self.db.sync()
+            self.db.sync()
 
     def close(self):
         try:
@@ -285,10 +282,6 @@ class HybridStorage:
             logger.debug("HybridStorage-Datenbank geschlossen")
         except Exception as e:
             logger.warning(f"Fehler beim Schließen der HybridStorage-Datenbank: {e}")
-
-# =============================================================================
-# 3. TRIE FÜR SUBDOMAIN-OPTIMIERUNG
-# =============================================================================
 
 @dataclass
 class TrieNode:
@@ -307,31 +300,47 @@ class TrieNode:
         self.is_end = state['is_end']
 
 class DomainTrie:
-    """Trie-Struktur zur Optimierung von Subdomain-Prüfungen mit optionalem Bloom-Filter"""
-    def __init__(self):
-        self.storage = HybridStorage(TRIE_DB_PATH)
+    def __init__(self, url: str):
+        # Erstelle eindeutigen DB-Pfad basierend auf URL-Hash
+        url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
+        db_path = os.path.join(TMP_DIR, f'trie_cache_{url_hash}.db')
+        logger.debug(f"Initializing DomainTrie with db_path: {db_path} for URL: {url}")
+        self.storage = HybridStorage(db_path)
         self.root_key = 'root'
-        self.bloom_filter = None
-        if CONFIG['use_bloom_filter'] and BloomFilter:
-            self.bloom_filter = BloomFilter(
-                max_elements=CONFIG['bloom_filter_capacity'],
+        if CONFIG['use_bloom_filter']:
+            self.bloom_filter = ScalableBloomFilter(
+                initial_capacity=CONFIG['bloom_filter_capacity'],
                 error_rate=CONFIG['bloom_filter_error_rate']
             )
-        elif CONFIG['use_bloom_filter'] and not BloomFilter:
-            logger.warning("Bloom-Filter aktiviert, aber bloom-filter nicht installiert. Deaktiviere Bloom-Filter.")
-            CONFIG['use_bloom_filter'] = False
-        if self.root_key not in self.storage:
+        else:
+            self.bloom_filter = None
+        try:
+            root_node = self.storage[self.root_key]
+            if not isinstance(root_node, TrieNode):
+                logger.warning(f"Root-Knoten ungültig (Typ: {type(root_node)}), initialisiere neu")
+                self.storage.reset_if_corrupt()
+                self.storage[self.root_key] = TrieNode()
+        except KeyError:
+            logger.debug("Root-Knoten nicht vorhanden, initialisiere neu")
             self.storage[self.root_key] = TrieNode()
         logger.debug("DomainTrie initialisiert")
 
     def insert(self, domain: str):
         try:
-            logger.debug(f"Inserting domain: {domain}")
             if self.bloom_filter and domain in self.bloom_filter:
                 logger.debug(f"Domain {domain} bereits im Bloom-Filter")
                 return
+            logger.debug(f"Inserting domain: {domain}")
+            try:
+                root_node = self.storage[self.root_key]
+                if not isinstance(root_node, TrieNode):
+                    logger.error(f"Root-Knoten ist kein TrieNode, sondern: {type(root_node)}")
+                    self.storage.reset_if_corrupt()
+                    self.storage[self.root_key] = TrieNode()
+            except KeyError:
+                logger.warning("Root-Knoten nicht vorhanden, initialisiere neu")
+                self.storage[self.root_key] = TrieNode()
             node = self.storage[self.root_key]
-            logger.debug(f"Root node retrieved: {node}")
             node_key = self.root_key
             parts = domain.split('.')[::-1]
             for i, part in enumerate(parts):
@@ -356,9 +365,6 @@ class DomainTrie:
     def has_parent(self, domain: str) -> bool:
         try:
             logger.debug(f"Checking parent for domain: {domain}")
-            if self.bloom_filter and domain not in self.bloom_filter:
-                logger.debug(f"Domain {domain} not in Bloom-Filter")
-                return False
             parts = domain.split('.')[::-1]
             node = self.storage[self.root_key]
             logger.debug(f"Root node retrieved: {node}")
@@ -393,7 +399,7 @@ class DomainTrie:
         logger.debug("DomainTrie geschlossen")
 
 def save_trie_cache(trie: DomainTrie, all_domains_hash: str):
-    if not CONFIG['cache_trie']:
+    if not CONFIG['cache_trie'] or global_mode == SystemMode.EMERGENCY:
         return
     try:
         data = {'hash': all_domains_hash, 'version': '1.0'}
@@ -404,8 +410,8 @@ def save_trie_cache(trie: DomainTrie, all_domains_hash: str):
     except Exception as e:
         logger.warning(f"Fehler beim Speichern des Trie-Caches: {e}")
 
-def load_trie_cache(all_domains_hash: str) -> Optional[DomainTrie]:
-    if not CONFIG['cache_trie'] or not os.path.exists(TRIE_CACHE_PATH):
+def load_trie_cache(all_domains_hash: str, url: str) -> Optional[DomainTrie]:
+    if not CONFIG['cache_trie'] or not os.path.exists(TRIE_CACHE_PATH) or global_mode == SystemMode.EMERGENCY:
         logger.debug("Trie-Cache nicht verfügbar oder deaktiviert")
         return None
     try:
@@ -418,16 +424,12 @@ def load_trie_cache(all_domains_hash: str) -> Optional[DomainTrie]:
         if data['hash'] == all_domains_hash:
             STATISTICS['trie_cache_hits'] += 1
             logger.info("Trie-Cache geladen")
-            return DomainTrie()
+            return DomainTrie(url)
         logger.debug("Trie-Cache ungültig (Hash geändert)")
         return None
     except Exception as e:
         logger.warning(f"Fehler beim Laden des Trie-Caches: {e}")
         return None
-
-# =============================================================================
-# 4. CACHE-MANAGEMENT
-# =============================================================================
 
 class CacheManager:
     def __init__(self, db_path: str, flush_interval: int):
@@ -445,7 +447,7 @@ class CacheManager:
             free_memory = psutil.virtual_memory().available
             estimated_cache_size = int(free_memory * 0.05 / (1024 * 1024) * 100)
             dynamic_size = max(2, min(100000, estimated_cache_size))
-            if free_memory < 150 * 1024 * 1024:  # Reduzierte Schwelle auf 150 MB
+            if free_memory < CONFIG['resource_thresholds']['low_memory_mb'] * 1024 * 1024:
                 dynamic_size = 2
                 logger.warning("Low-Memory-Modus aktiviert: Cache-Größe auf 2 reduziert")
             logger.debug(f"Dynamische Cache-Größe berechnet: {dynamic_size} (freier RAM: {free_memory/(1024*1024):.2f} MB)")
@@ -470,7 +472,7 @@ class CacheManager:
     def init_database(self):
         try:
             os.makedirs(TMP_DIR, exist_ok=True)
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             c = conn.cursor()
             c.execute('''
                 CREATE TABLE IF NOT EXISTS list_cache (
@@ -494,15 +496,15 @@ class CacheManager:
                 free_memory = psutil.virtual_memory().available / (1024 * 1024)
                 cpu_usage = psutil.cpu_percent(interval=0.1)
                 if free_memory < 50 or psutil.virtual_memory().percent > 90:
-                    logger.warning(f"Kritischer Speicherstand: {free_memory:.2f} MB frei, Auslastung: {psutil.virtual_memory().percent}%, reduziere Cache")
+                    log_once(logging.WARNING, f"Kritischer Speicherstand: {free_memory:.2f} MB frei, Auslastung: {psutil.virtual_memory().percent}%, reduziere Cache")
                     self.current_cache_size = max(2, self.current_cache_size // 2)
                     self.adjust_cache_size()
-                    self.domain_cache.use_ram = False
+                    self.domain_cache.use_ram = True
                 elif free_memory > 512 and psutil.virtual_memory().percent < 50:
                     self.adjust_cache_size()
                     self.domain_cache.use_ram = True
                 if cpu_usage > 90:
-                    logger.warning(f"Hohe CPU-Auslastung: {cpu_usage}%, reduziere parallele Aufgaben")
+                    log_once(logging.WARNING, f"Hohe CPU-Auslastung: {cpu_usage}%, reduziere parallele Aufgaben")
                 logger.debug(f"Speicherverbrauch: {memory:.2f} MB, CPU: {cpu_usage}%, Cache-Größe: {self.current_cache_size}, RAM-Speicher: {self.domain_cache.use_ram}")
                 if time.time() - self.last_flush > self.flush_interval:
                     async with cache_flush_lock:
@@ -549,7 +551,7 @@ class CacheManager:
 
     def load_list_cache(self) -> Dict[str, Dict]:
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             c = conn.cursor()
             c.execute("SELECT url, md5, last_checked FROM list_cache")
             self.list_cache = {row[0]: {"md5": row[1], "last_checked": row[2]} for row in c.fetchall()}
@@ -562,7 +564,7 @@ class CacheManager:
 
     def save_list_cache(self, cache: Dict[str, Dict]):
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             c = conn.cursor()
             c.execute("DELETE FROM list_cache")
             for url, data in cache.items():
@@ -574,86 +576,111 @@ class CacheManager:
             conn.close()
             logger.debug("List-Cache gespeichert")
         except Exception as e:
-            logger.warning(f"Fehler beim Speichern des List-Caches: {e}")
+            logger.warning(f"Fehler beim Speichern des List-Caches: {e}, fahre fort")
 
-    def cleanup(self):
-        try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
-            c = conn.cursor()
-            expiry = (datetime.now() - timedelta(days=CONFIG['domain_cache_validity_days'])).isoformat()
-            c.execute("DELETE FROM domain_cache WHERE checked_at < ?", (expiry,))
-            conn.commit()
-            conn.close()
-            logger.debug("Cache bereinigt")
-        except Exception as e:
-            logger.warning(f"Fehler beim Bereinigen der Datenbank: {e}")
-
-# =============================================================================
-# 5. HILFSFUNKTIONEN
-# =============================================================================
+def cleanup_temp_files(cache_manager: CacheManager):
+    try:
+        list_cache = cache_manager.load_list_cache()
+        valid_urls = set(list_cache.keys())
+        expiry = datetime.now() - timedelta(days=CONFIG['domain_cache_validity_days'])
+        for file in os.listdir(TMP_DIR):
+            if file.endswith('.tmp') or file.endswith('.filtered') or file.startswith('trie_cache_'):
+                file_path = os.path.join(TMP_DIR, file)
+                url = file.replace('.tmp', '').replace('.filtered', '').replace('trie_cache_', '').replace('__', '/').replace('_', '://')
+                # Überprüfe, ob die Datei zu einer aktiven URL gehört und nicht veraltet ist
+                if file.startswith('trie_cache_'):
+                    if url in list_cache:
+                        last_checked = datetime.fromisoformat(list_cache[url]['last_checked'])
+                        if last_checked < expiry:
+                            try:
+                                os.remove(file_path)
+                                logger.info(f"Veraltete Trie-Cache-Datei gelöscht: {file}")
+                            except Exception as e:
+                                logger.error(f"Fehler beim Löschen von {file}: {e}")
+                        else:
+                            logger.debug(f"Trie-Cache-Datei behalten: {file}")
+                    else:
+                        try:
+                            os.remove(file_path)
+                            logger.info(f"Obsolete Trie-Cache-Datei gelöscht: {file}")
+                        except Exception as e:
+                            logger.error(f"Fehler beim Löschen von {file}: {e}")
+                elif url not in valid_urls:
+                    try:
+                        os.remove(file_path)
+                        logger.info(f"Obsolete Datei gelöscht: {file}")
+                    except Exception as e:
+                        logger.error(f"Fehler beim Löschen von {file}: {e}")
+        logger.debug("Temporäre Dateien bereinigt")
+    except Exception as e:
+        logger.error(f"Fehler beim Bereinigen temporärer Dateien: {e}")
 
 def load_config():
     config_path = os.path.join(SCRIPT_DIR, 'config.json')
     logger.debug(f"Versuche, Konfigurationsdatei zu laden: {config_path}")
     try:
+        CONFIG.clear()
         CONFIG.update(DEFAULT_CONFIG)
         if not os.path.exists(config_path):
             logger.warning(f"Konfigurationsdatei {config_path} nicht gefunden, erstelle Standardkonfiguration")
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(DEFAULT_CONFIG, f, indent=4)
-        with open(config_path, 'r', encoding='utf-8') as f:
-            custom_config = json.load(f)
-            CONFIG.update(custom_config)
-        logger.debug("Konfigurationsdatei erfolgreich geladen")
-    except json.JSONDecodeError as e:
-        logger.error(f"Fehler beim Parsen von config.json: {e}. Verwende Standardkonfiguration.")
-    except Exception as e:
-        logger.error(f"Fehler beim Laden der Konfigurationsdatei: {e}. Verwende Standardkonfiguration.")
-    
-    if 'log_file' not in CONFIG:
-        CONFIG['log_file'] = DEFAULT_CONFIG['log_file']
-        logger.warning(f"'log_file' nicht in Konfiguration gefunden, verwende Standard: {CONFIG['log_file']}")
-    if 'hosts_ip' not in CONFIG:
-        CONFIG['hosts_ip'] = DEFAULT_CONFIG['hosts_ip']
-        logger.warning(f"'hosts_ip' nicht in Konfiguration gefunden, verwende Standard: {CONFIG['hosts_ip']}")
-    if 'use_smtp' not in CONFIG:
-        CONFIG['use_smtp'] = DEFAULT_CONFIG['use_smtp']
-        logger.warning(f"'use_smtp' nicht in Konfiguration gefunden, verwende Standard: {CONFIG['use_smtp']}")
-
-    CONFIG['smtp_password'] = os.environ.get('SMTP_PASSWORD', CONFIG.get('smtp_password', ''))
-    if CONFIG['send_email'] and CONFIG['use_smtp']:
-        if not all([CONFIG.get(k) for k in ['smtp_server', 'smtp_port', 'smtp_user', 'smtp_password', 'email_recipient', 'email_sender']]):
-            logger.warning("Ungültige SMTP-Konfiguration, deaktiviere E-Mail-Benachrichtigungen")
-            CONFIG['send_email'] = False
-    valid_dns_servers = []
-    for server in CONFIG['dns_servers']:
-        try:
-            socket.inet_pton(socket.AF_INET, server)
-            valid_dns_servers.append(server)
-        except socket.error:
+        else:
             try:
-                socket.inet_pton(socket.AF_INET6, server)
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    custom_config = json.load(f)
+                    CONFIG.update(custom_config)
+            except json.JSONDecodeError as e:
+                logger.error(f"Fehler beim Parsen von config.json: {e}. Verwende Standardkonfiguration.")
+                CONFIG.update(DEFAULT_CONFIG)
+            except Exception as e:
+                logger.error(f"Fehler beim Laden von config.json: {e}. Verwende Standardkonfiguration.")
+                CONFIG.update(DEFAULT_CONFIG)
+        for key in ['log_file', 'hosts_ip', 'use_smtp', 'send_email', 'resource_thresholds', 'dns_servers', 'cache_flush_interval', 'category_weights', 'http_timeout']:
+            if key not in CONFIG:
+                CONFIG[key] = DEFAULT_CONFIG[key]
+                logger.warning(f"'{key}' nicht in Konfiguration gefunden, verwende Standard: {CONFIG[key]}")
+        valid_dns_servers = []
+        for server in CONFIG['dns_servers']:
+            try:
+                socket.inet_pton(socket.AF_INET, server)
                 valid_dns_servers.append(server)
             except socket.error:
-                logger.warning(f"Ungültige DNS-Server-Adresse: {server}")
-    if not valid_dns_servers:
-        logger.warning("Keine gültigen DNS-Server angegeben, verwende Fallback: 8.8.8.8, 1.1.1.1")
-        CONFIG['dns_servers'] = ["8.8.8.8", "1.1.1.1"]
-    else:
-        CONFIG['dns_servers'] = valid_dns_servers
-    if not isinstance(CONFIG['cache_flush_interval'], (int, float)) or CONFIG['cache_flush_interval'] <= 0:
-        logger.warning("Ungültiges cache_flush_interval, verwende Standard: 300")
-        CONFIG['cache_flush_interval'] = 300
-    if not isinstance(CONFIG['category_weights'], dict):
-        logger.warning("Ungültige category_weights, verwende Standard")
-        CONFIG['category_weights'] = DEFAULT_CONFIG['category_weights']
-    try:
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump({k: v for k, v in CONFIG.items() if k != 'smtp_password'}, f, indent=4)
-        logger.debug(f"Konfigurationsdatei aktualisiert: {config_path}")
+                try:
+                    socket.inet_pton(socket.AF_INET6, server)
+                    valid_dns_servers.append(server)
+                except socket.error:
+                    logger.warning(f"Ungültige DNS-Server-Adresse: {server}")
+        if not valid_dns_servers:
+            logger.warning("Keine gültigen DNS-Server angegeben, verwende Fallback: 8.8.8.8, 1.1.1.1")
+            CONFIG['dns_servers'] = ["8.8.8.8", "1.1.1.1"]
+        else:
+            CONFIG['dns_servers'] = valid_dns_servers
+        if not isinstance(CONFIG['cache_flush_interval'], (int, float)) or CONFIG['cache_flush_interval'] <= 0:
+            logger.warning("Ungültiges cache_flush_interval, verwende Standard: 300")
+            CONFIG['cache_flush_interval'] = 300
+        if not isinstance(CONFIG['http_timeout'], (int, float)) or CONFIG['http_timeout'] <= 0:
+            logger.warning("Ungültiges http_timeout, verwende Standard: 60")
+            CONFIG['http_timeout'] = 60
+        if not isinstance(CONFIG['category_weights'], dict):
+            logger.warning("Ungültige category_weights, verwende Standard")
+            CONFIG['category_weights'] = DEFAULT_CONFIG['category_weights']
+        CONFIG['smtp_password'] = os.environ.get('SMTP_PASSWORD', CONFIG.get('smtp_password', ''))
+        if CONFIG['send_email'] and CONFIG['use_smtp']:
+            if not all([CONFIG.get(k) for k in ['smtp_server', 'smtp_port', 'smtp_user', 'smtp_password', 'email_recipient', 'email_sender']]):
+                logger.warning("Ungültige SMTP-Konfiguration, deaktiviere E-Mail-Benachrichtigungen")
+                CONFIG['send_email'] = False
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump({k: v for k, v in CONFIG.items() if k != 'smtp_password'}, f, indent=4)
+            logger.debug(f"Konfigurationsdatei aktualisiert: {config_path}")
+        except Exception as e:
+            logger.error(f"Fehler beim Speichern der Konfigurationsdatei: {e}")
+        logger.info(f"Verwendete DNS-Server: {', '.join(CONFIG['dns_servers'])}")
     except Exception as e:
-        logger.error(f"Fehler beim Speichern der Konfigurationsdatei: {e}")
-    logger.info(f"Verwendete DNS-Server: {', '.join(CONFIG['dns_servers'])}")
+        logger.error(f"Kritischer Fehler in load_config: {e}. Verwende Standardkonfiguration.")
+        CONFIG.clear()
+        CONFIG.update(DEFAULT_CONFIG)
 
 def setup_logging():
     try:
@@ -670,6 +697,11 @@ def setup_logging():
         level = getattr(logging, CONFIG.get('logging_level', 'INFO').upper(), logging.INFO)
         if CONFIG.get('detailed_log', False):
             level = logging.DEBUG
+        elif global_mode == SystemMode.EMERGENCY:
+            level = logging.ERROR
+        
+        logger.handlers.clear()
+        
         handler = RotatingFileHandler(CONFIG['log_file'], maxBytes=10*1024*1024, backupCount=5)
         if CONFIG.get('log_format') == 'json':
             handler.setFormatter(logging.Formatter(
@@ -677,13 +709,19 @@ def setup_logging():
             ))
         else:
             handler.setFormatter(logging.Formatter(LOG_FORMAT))
-        logger.handlers.clear()  # Entferne bestehende Handler
+        handler.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(logging.INFO if global_mode != SystemMode.EMERGENCY else logging.ERROR)
+        stream_handler.setFormatter(handler.formatter)
+        logger.addHandler(stream_handler)
+        
         logger.setLevel(level)
-        logger.handlers = [handler, logging.StreamHandler()]
+        
         logger.debug(f"Logging konfiguriert mit Level {logging.getLevelName(level)}")
         logger.info("Logging erfolgreich konfiguriert")
     except Exception as e:
-        logger.error(f"Fehler beim Einrichten des Loggings: {e}")
         print(f"Fehler beim Einrichten des Loggings: {e}")
         sys.exit(1)
 
@@ -713,7 +751,7 @@ def append_to_file(filepath: str, content: str):
         logger.error(f"Fehler beim Anhängen an {filepath}: {e}")
 
 def send_email(subject: str, body: str):
-    if not CONFIG['send_email']:
+    if not CONFIG.get('send_email', False) or global_mode == SystemMode.EMERGENCY:
         return
     try:
         msg = MIMEText(body)
@@ -722,14 +760,12 @@ def send_email(subject: str, body: str):
         msg['To'] = CONFIG['email_recipient']
         
         if CONFIG['use_smtp']:
-            # SMTP-Versand
             with smtplib.SMTP(CONFIG['smtp_server'], CONFIG['smtp_port']) as server:
                 server.starttls()
                 server.login(CONFIG['smtp_user'], CONFIG['smtp_password'])
                 server.send_message(msg)
             logger.info("E-Mail-Benachrichtigung über SMTP gesendet")
         else:
-            # Lokales Postfix via sendmail
             sendmail_cmd = ['/usr/sbin/sendmail', '-t', '-oi']
             process = subprocess.Popen(sendmail_cmd, stdin=subprocess.PIPE)
             process.communicate(msg.as_string().encode('utf-8'))
@@ -740,13 +776,21 @@ def send_email(subject: str, body: str):
     except Exception as e:
         logger.error(f"Fehler beim Senden der E-Mail: {e}")
 
-def is_ipv6_supported() -> bool:
+async def is_ipv6_supported() -> bool:
     try:
-        socket.create_connection(("ipv6.google.com", 80), timeout=2)
-        logger.debug("IPv6 wird unterstützt")
+        ipv6_servers = [server for server in CONFIG['dns_servers'] if ':' in server]
+        if not ipv6_servers:
+            logger.debug("Keine IPv6-DNS-Server in der Konfiguration gefunden")
+            return False
+        resolver = aiodns.DNSResolver(nameservers=ipv6_servers, timeout=2)
+        await resolver.query("example.com", 'AAAA')
+        logger.debug("IPv6 wird unterstützt (erfolgreicher AAAA-Lookup über IPv6-DNS-Server)")
         return True
-    except (socket.gaierror, socket.timeout):
-        logger.debug("IPv6 wird nicht unterstützt")
+    except (aiodns.error.DNSError, asyncio.TimeoutError) as e:
+        logger.debug(f"IPv6 wird nicht unterstützt: {e}")
+        return False
+    except Exception as e:
+        logger.warning(f"Unbekannter Fehler beim Testen von IPv6: {e}")
         return False
 
 def export_statistics_csv():
@@ -769,7 +813,7 @@ def export_statistics_csv():
         logger.error(f"Fehler beim Exportieren der CSV: {e}")
 
 def export_prometheus_metrics(start_time: float):
-    if not CONFIG['export_prometheus']:
+    if not CONFIG['export_prometheus'] or global_mode == SystemMode.EMERGENCY:
         return
     metrics_path = os.path.join(TMP_DIR, 'metrics.prom')
     try:
@@ -799,12 +843,7 @@ def export_prometheus_metrics(start_time: float):
     except Exception as e:
         logger.error(f"Fehler beim Exportieren der Prometheus-Metriken: {e}")
 
-# =============================================================================
-# 6. VERZEICHNIS- UND DATEIMANAGEMENT
-# =============================================================================
-
 def initialize_directories_and_files():
-    """Initialisiert Verzeichnisse und Standarddateien"""
     try:
         os.makedirs(TMP_DIR, exist_ok=True)
         files = [
@@ -827,29 +866,7 @@ def initialize_directories_and_files():
         logger.error(f"Fehler beim Initialisieren der Verzeichnisse und Dateien: {e}")
         raise
 
-def cleanup_temp_files(cache_manager: CacheManager):
-    """Bereinigt temporäre Dateien, die nicht mehr benötigt werden"""
-    try:
-        list_cache = cache_manager.load_list_cache()
-        for file in os.listdir(TMP_DIR):
-            if file.endswith('.tmp') or file.endswith('.filtered'):
-                url = file.replace('.tmp', '').replace('.filtered', '').replace('__', '/').replace('_', '://')
-                if url not in list_cache:
-                    try:
-                        os.remove(os.path.join(TMP_DIR, file))
-                        logger.info(f"Obsolete Datei gelöscht: {file}")
-                    except Exception as e:
-                        logger.error(f"Fehler beim Löschen von {file}: {e}")
-        logger.debug("Temporäre Dateien bereinigt")
-    except Exception as e:
-        logger.error(f"Fehler beim Bereinigen temporärer Dateien: {e}")
-
-# =============================================================================
-# 7. LISTEN- UND DOMAIN-MANAGEMENT
-# =============================================================================
-
 def load_whitelist_blacklist() -> tuple[set[str], set[str]]:
-    """Lädt White- und Blacklist aus Dateien"""
     try:
         whitelist = set()
         blacklist = set()
@@ -868,7 +885,6 @@ def load_whitelist_blacklist() -> tuple[set[str], set[str]]:
         return set(), set()
 
 def load_hosts_sources() -> List[str]:
-    """Lädt die Quell-URLs aus hosts_sources.conf"""
     sources_path = os.path.join(SCRIPT_DIR, 'hosts_sources.conf')
     try:
         if not os.path.exists(sources_path):
@@ -890,30 +906,47 @@ def load_hosts_sources() -> List[str]:
         return []
 
 def parse_domains(content: str, url: str) -> Iterator[str]:
-    """Parst Domains aus dem Inhalt einer Liste"""
     try:
         for line in content.splitlines():
             line = line.strip()
             if not line or line.startswith(('#', '!')):
+                logger.debug(f"Überspringe Kommentar oder leere Zeile von {url}: {line}")
                 continue
             match = DOMAIN_PATTERN.match(line)
             if match:
-                domain = (match.group(1) or match.group(2)).lower()
+                domain = (match.group(1) or match.group(2) or match.group(3)).lower()
+                logger.debug(f"Geparsed Domain von {url}: {domain}")
                 if ist_gueltige_domain(domain) and not domain.startswith('*'):
+                    STATISTICS['domain_sources'][domain] = url
+                    logger.debug(f"Valide Domain von {url}: {domain}")
                     yield domain
+                else:
+                    logger.debug(f"Domain ungültig oder mit * beginnend von {url}: {domain}")
+            else:
+                logger.debug(f"Keine Domain in Zeile von {url}: {line}")
     except Exception as e:
         logger.error(f"Fehler beim Parsen der Domains aus {url}: {e}")
 
 def ist_gueltige_domain(domain: str) -> bool:
-    """Validiert, ob eine Domain gültig ist"""
     try:
-        return bool(DOMAIN_VALIDATOR.match(domain))
+        try:
+            domain = idna.encode(domain).decode('ascii')
+            logger.debug(f"Domain {domain} nach IDN-Konvertierung")
+        except idna.core.IDNAError as e:
+            logger.debug(f"Ungültige IDN-Domain {domain}: {e}")
+            return False
+        match = DOMAIN_VALIDATOR.match(domain)
+        if match:
+            logger.debug(f"Domain {domain} ist gültig")
+            return True
+        else:
+            logger.debug(f"Domain {domain} ist ungültig (kein Match mit DOMAIN_VALIDATOR)")
+            return False
     except Exception as e:
         logger.error(f"Fehler beim Validieren der Domain {domain}: {e}")
         return False
 
 def categorize_list(url: str) -> str:
-    """Kategorisiert eine Liste basierend auf ihrer URL"""
     try:
         url_lower = url.lower()
         if 'malware' in url_lower or 'phishing' in url_lower or 'crypto' in url_lower:
@@ -927,12 +960,7 @@ def categorize_list(url: str) -> str:
         logger.error(f"Fehler beim Kategorisieren der URL {url}: {e}")
         return 'unknown'
 
-# =============================================================================
-# 8. RESSOURCENMANAGEMENT
-# =============================================================================
-
 async def select_best_dns_server(dns_servers: List[str], timeout: float = 5.0) -> List[str]:
-    """Wählt die besten DNS-Server basierend auf Latenz"""
     async def test_server(server: str) -> tuple[str, float]:
         try:
             resolver = aiodns.DNSResolver(nameservers=[server], timeout=timeout)
@@ -959,31 +987,121 @@ async def select_best_dns_server(dns_servers: List[str], timeout: float = 5.0) -
         return dns_servers
 
 async def monitor_resources(cache_manager: CacheManager):
-    """Asynchroner Task zur Überwachung von CPU, RAM und Netzwerklatenz alle 5 Sekunden"""
+    global global_mode
+    logger.info("Starte Ressourcenüberwachung...")
+    resource_state = {
+        "low_memory": False,
+        "high_cpu": False,
+        "high_latency": False,
+        "mode": global_mode
+    }
+    consecutive_violations = {
+        "low_memory": 0,
+        "high_cpu": 0,
+        "high_latency": 0
+    }
+    history = {
+        "free_memory_mb": deque(maxlen=CONFIG['resource_thresholds']['moving_average_window']),
+        "cpu_usage_percent": deque(maxlen=CONFIG['resource_thresholds']['moving_average_window']),
+        "latency_s": deque(maxlen=CONFIG['resource_thresholds']['moving_average_window'])
+    }
+    last_status_log = time.time()
+    first_run = True
+
+    def calculate_moving_average(values: deque) -> float:
+        return sum(values) / len(values) if values else 0.0
+
+    def print_system_status():
+        print(f"Systemzustandsübersicht:")
+        print(f"- Aktueller Modus: {resource_state['mode'].value}")
+        print(f"- Freier RAM: {avg_memory:.2f} MB")
+        print(f"- CPU-Last: {avg_cpu:.1f}%")
+        print(f"- DNS-Latenz: {avg_latency:.2f}s")
+        print(f"- Angepasste Batch-Größe: {batch_size} Domains")
+
     while True:
         try:
-            free_memory = psutil.virtual_memory().available
+            free_memory = psutil.virtual_memory().available / (1024 * 1024)
             cpu_usage = psutil.cpu_percent(interval=0.1)
             latency = await check_network_latency()
             max_jobs, batch_size, max_concurrent_dns = get_system_resources()
+
+            history["free_memory_mb"].append(free_memory)
+            history["cpu_usage_percent"].append(cpu_usage)
+            history["latency_s"].append(latency if latency != float('inf') else 5.0)
+
+            avg_memory = calculate_moving_average(history["free_memory_mb"])
+            avg_cpu = calculate_moving_average(history["cpu_usage_percent"])
+            avg_latency = calculate_moving_average(history["latency_s"])
+
+            new_mode = resource_state["mode"]
+            if avg_memory < CONFIG['resource_thresholds']['emergency_memory_mb']:
+                new_mode = SystemMode.EMERGENCY
+            elif avg_memory < CONFIG['resource_thresholds']['low_memory_mb'] or avg_cpu > CONFIG['resource_thresholds']['high_cpu_percent'] or avg_latency > CONFIG['resource_thresholds']['high_latency_s']:
+                new_mode = SystemMode.LOW_MEMORY
+            else:
+                new_mode = SystemMode.NORMAL
+
+            if new_mode != resource_state["mode"]:
+                logger.info(f"Betriebsmodus gewechselt: {resource_state['mode'].value} → {new_mode.value}")
+                resource_state["mode"] = new_mode
+                global_mode = new_mode
+
+            if avg_memory < CONFIG['resource_thresholds']['low_memory_mb']:
+                consecutive_violations["low_memory"] += 1
+                if consecutive_violations["low_memory"] >= CONFIG['resource_thresholds']['consecutive_violations'] and not resource_state["low_memory"]:
+                    logger.warning(f"Wenig RAM verfügbar: Durchschnitt {avg_memory:.2f} MB, Batch-Größe: {batch_size}, DNS-Anfragen: {max_concurrent_dns}")
+                    resource_state["low_memory"] = True
+            else:
+                consecutive_violations["low_memory"] = 0
+                if resource_state["low_memory"]:
+                    logger.info(f"RAM wieder ausreichend verfügbar: Durchschnitt {avg_memory:.2f} MB frei")
+                    resource_state["low_memory"] = False
+
+            if avg_cpu > CONFIG['resource_thresholds']['high_cpu_percent']:
+                consecutive_violations["high_cpu"] += 1
+                if consecutive_violations["high_cpu"] >= CONFIG['resource_thresholds']['consecutive_violations'] and not resource_state["high_cpu"]:
+                    logger.warning(f"Hohe CPU-Auslastung erkannt: Durchschnitt {avg_cpu:.1f}%, reduziere parallele Jobs")
+                    resource_state["high_cpu"] = True
+            else:
+                consecutive_violations["high_cpu"] = 0
+                if resource_state["high_cpu"]:
+                    logger.info(f"CPU-Auslastung wieder normal: Durchschnitt {avg_cpu:.1f}%")
+                    resource_state["high_cpu"] = False
+
+            if avg_latency > CONFIG['resource_thresholds']['high_latency_s']:
+                consecutive_violations["high_latency"] += 1
+                if consecutive_violations["high_latency"] >= CONFIG['resource_thresholds']['consecutive_violations'] and not resource_state["high_latency"]:
+                    logger.warning(f"Hohe Netzwerklatenz erkannt: Durchschnitt {avg_latency:.2f}s, DNS-Anfragen reduziert")
+                    resource_state["high_latency"] = True
+            else:
+                consecutive_violations["high_latency"] = 0
+                if resource_state["high_latency"]:
+                    logger.info(f"Netzwerklatenz wieder normal: Durchschnitt {avg_latency:.2f}s")
+                    resource_state["high_latency"] = False
+
             cache_manager.adjust_cache_size()
             cache_manager.domain_cache.update_threshold()
-            if free_memory < 150 * 1024 * 1024:  # Reduzierte Schwelle auf 150 MB
-                logger.warning(f"RAM niedrig: {free_memory/(1024*1024):.2f} MB, Batch-Größe: {batch_size}, DNS-Anfragen: {max_concurrent_dns}")
-                logger.setLevel(logging.INFO)
-            else:
-                logger.setLevel(logging.DEBUG if CONFIG.get('detailed_log', False) else logging.INFO)
-            if latency > 1.0:
-                max_concurrent_dns = max(5, max_concurrent_dns // 2)
-                logger.info(f"Hohe Latenz ({latency:.2f}s), DNS-Anfragen reduziert: {max_concurrent_dns}")
-            logger.debug(f"Ressourcen: RAM={free_memory/(1024*1024):.2f} MB, CPU={cpu_usage:.1f}%, Latenz={latency:.2f}s, Batch-Größe={batch_size}, DNS-Anfragen={max_concurrent_dns}")
+
+            if first_run or time.time() - last_status_log >= 300:
+                print_system_status()
+                logger.info(
+                    f"Systemstatus (Modus: {resource_state['mode'].value}): "
+                    f"RAM-Durchschnitt={avg_memory:.2f} MB, "
+                    f"CPU-Durchschnitt={avg_cpu:.1f}%, Latenz-Durchschnitt={avg_latency:.2f}s, "
+                    f"Cachegröße={len(cache_manager.domain_cache.ram_storage)}, "
+                    f"Jobs={max_jobs}, DNS-Anfragen={max_concurrent_dns}"
+                )
+                last_status_log = time.time()
+                first_run = False
+
             await asyncio.sleep(5)
+
         except Exception as e:
             logger.warning(f"Fehler bei Ressourcenüberwachung: {e}")
             await asyncio.sleep(5)
 
 async def check_network_latency() -> float:
-    """Prüft die Netzwerklatenz zu einem DNS-Server"""
     try:
         resolver = aiodns.DNSResolver(nameservers=[CONFIG['dns_servers'][0]], timeout=5.0)
         start = time.time()
@@ -999,45 +1117,34 @@ async def check_network_latency() -> float:
         return float('inf')
 
 def get_system_resources() -> tuple[int, int, int]:
-    """Ermittelt verfügbare Systemressourcen und passt Jobs, Batch-Größe und DNS-Anfragen an"""
     try:
         cpu_load = psutil.cpu_percent(interval=0.1) / 100
         cpu_cores = psutil.cpu_count(logical=True) or 1
         free_memory = psutil.virtual_memory().available
-        max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)))
-        batch_size = max(10, min(200, int(free_memory / (400 * 1024))))
-        max_concurrent_dns = max(5, min(50, int(free_memory / (1024 * 1024))))
-        if free_memory < 50 * 1024 * 1024:
+        
+        if global_mode == SystemMode.EMERGENCY:
             max_jobs = 1
-            batch_size = 10
+            batch_size = 5
             max_concurrent_dns = 5
-            logger.warning("Sehr wenig RAM verfügbar, Low-Memory-Modus: Batch-Größe=10, Jobs=1, DNS-Anfragen=5")
-        elif free_memory < 100 * 1024 * 1024:
-            max_jobs = min(max_jobs, 2)
-            batch_size = min(batch_size, 50)
-            max_concurrent_dns = min(max_concurrent_dns, 5)
-            logger.warning("Wenig RAM verfügbar: Batch-Größe reduziert auf 50, DNS-Anfragen auf 5")
-        elif free_memory < 150 * 1024 * 1024:  # Reduzierte Schwelle auf 150 MB
-            max_jobs = min(max_jobs, 2)
-            batch_size = min(batch_size, 100)
-            max_concurrent_dns = min(max_concurrent_dns, 10)
-            logger.warning("Wenig RAM verfügbar: Batch-Größe reduziert auf 100, DNS-Anfragen auf 10")
-        if cpu_load > 0.9:
-            max_jobs = max(1, max_jobs // 2)
-            logger.warning(f"Hohe CPU-Auslastung: {cpu_load*100}%, reduziere parallele Jobs: {max_jobs}")
-        logger.debug(f"CPU-Last: {cpu_load:.2f}, Kerne: {cpu_cores}, Speicher: {free_memory/(1024*1024):.2f} MB")
+            log_once(logging.WARNING, f"Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5")
+        elif global_mode == SystemMode.LOW_MEMORY:
+            max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 2)
+            batch_size = max(10, min(50, int(free_memory / (800 * 1024))))
+            max_concurrent_dns = max(5, min(10, int(free_memory / (2048 * 1024))))
+            log_once(logging.WARNING, f"Low-Memory-Modus: Batch-Größe={batch_size}, Jobs={max_jobs}, DNS-Anfragen={max_concurrent_dns}")
+        else:
+            max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)))
+            batch_size = max(10, min(200, int(free_memory / (400 * 1024))))
+            max_concurrent_dns = max(5, min(50, int(free_memory / (1024 * 1024))))
+        
+        logger.debug(f"CPU-Last: {cpu_load:.2f}, Kerne: {cpu_cores}, Speicher: {free_memory/(1024*1024):.2f} MB, Modus: {global_mode.value}")
         logger.debug(f"Empfohlene Jobs: {max_jobs}, Batch-Größe: {batch_size}, DNS-Anfragen: {max_concurrent_dns}")
         return max_jobs, batch_size, max_concurrent_dns
     except Exception as e:
         logger.error(f"Fehler bei Ressourcenermittlung: {e}, verwende Fallback")
-        return 1, 10, 5
-
-# =============================================================================
-# 9. ASYNCHRONE DNS-VALIDIERUNG
-# =============================================================================
+        return 1, 5, 5
 
 async def test_dns_entry_async(domain: str, resolver, record_type: str = 'A', max_concurrent: int = 5) -> bool:
-    """Testet eine Domain asynchron auf Erreichbarkeit mit optimierter Parallelität"""
     async def query_with_backoff(domain: str, record: str, resolver, attempt: int) -> bool:
         try:
             result = await resolver.query(domain, record)
@@ -1110,7 +1217,6 @@ async def test_single_domain_async(domain: str, url: str, resolver, cache_manage
         return False
 
 async def test_domain_batch(domains: List[str], url: str, resolver, cache_manager: CacheManager, whitelist: set[str], blacklist: set[str], max_concurrent: int = 5) -> List[tuple[str, bool]]:
-    """Testet einen Batch von Domains asynchron"""
     try:
         free_memory = psutil.virtual_memory().available
         cache_manager.domain_cache.update_threshold()
@@ -1125,12 +1231,7 @@ async def test_domain_batch(domains: List[str], url: str, resolver, cache_manage
         logger.error(f"Fehler beim Testen des Domain-Batches für URL {url}: {e}")
         return []
 
-# =============================================================================
-# 10. LISTENBEWERTUNG
-# =============================================================================
-
 def evaluate_lists(url_counts: Dict[str, Dict], total_domains: int):
-    """Bewertet die Qualität der Listen in Batches"""
     try:
         free_memory = psutil.virtual_memory().available
         _, batch_size, _ = get_system_resources()
@@ -1167,23 +1268,22 @@ def evaluate_lists(url_counts: Dict[str, Dict], total_domains: int):
     except Exception as e:
         logger.error(f"Fehler beim Bewerten der Listen: {e}")
 
-# =============================================================================
-# 11. GIT-MANAGEMENT
-# =============================================================================
-
 def setup_git() -> bool:
-    """Richtet Git und SSH für GitHub-Uploads ein"""
     try:
         subprocess.run(['git', '--version'], check=True)
         git_dir = os.path.join(SCRIPT_DIR, '.git')
         if os.path.exists(git_dir):
-            # Prüfe, ob das Remote bereits existiert
             result = subprocess.run(['git', 'remote', '-v'], capture_output=True, text=True, cwd=SCRIPT_DIR)
-            if CONFIG['github_repo'] in result.stdout:
-                logger.debug("Git-Repository und Remote bereits konfiguriert")
-            else:
+            if CONFIG['github_repo'] not in result.stdout:
                 subprocess.run(['git', 'remote', 'add', 'origin', CONFIG['github_repo']], check=True, cwd=SCRIPT_DIR)
                 logger.debug(f"Git-Remote hinzugefügt: {CONFIG['github_repo']}")
+            branch_result = subprocess.run(['git', 'branch', '--list', CONFIG['github_branch']], capture_output=True, text=True, cwd=SCRIPT_DIR)
+            if CONFIG['github_branch'] in branch_result.stdout:
+                subprocess.run(['git', 'checkout', CONFIG['github_branch']], check=True, cwd=SCRIPT_DIR)
+                logger.debug(f"Zu bestehendem Branch {CONFIG['github_branch']} gewechselt")
+            else:
+                subprocess.run(['git', 'checkout', '-b', CONFIG['github_branch']], check=True, cwd=SCRIPT_DIR)
+                logger.debug(f"Neuer Branch {CONFIG['github_branch']} erstellt")
         else:
             subprocess.run(['git', 'init'], check=True, cwd=SCRIPT_DIR)
             subprocess.run(['git', 'checkout', '-b', CONFIG['github_branch']], check=True, cwd=SCRIPT_DIR)
@@ -1202,7 +1302,7 @@ def setup_git() -> bool:
             exit(0)
 
         ssh_config_path = os.path.expanduser('~/.ssh/config')
-        with open(ssh_config_path, 'a') as f:  # Append statt Überschreiben
+        with open(ssh_config_path, 'a') as f:
             f.write(
                 "\nHost github.com\n"
                 "  HostName github.com\n"
@@ -1212,22 +1312,17 @@ def setup_git() -> bool:
             )
         logger.info(f"SSH-Konfigurationsdatei aktualisiert: {ssh_config_path}")
 
-        # Stelle sicher, dass der SSH-Agent läuft und der Schlüssel geladen ist
         try:
-            # Versuche, den Schlüssel hinzuzufügen
             subprocess.run(['ssh-add', ssh_key_path], check=True)
             logger.debug(f"SSH-Schlüssel {ssh_key_path} erfolgreich hinzugefügt")
         except subprocess.CalledProcessError as e:
             logger.warning(f"Fehler beim Hinzufügen des SSH-Schlüssels: {e}")
-            # Starte einen neuen SSH-Agent, falls nötig
-            subprocess.run(['pkill', 'ssh-agent'], check=False)  # Beende bestehende Agenten
+            subprocess.run(['pkill', 'ssh-agent'], check=False)
             process = subprocess.run('eval "$(ssh-agent -s)"', shell=True, check=True, capture_output=True, text=True)
             logger.debug(f"Neuer SSH-Agent gestartet: {process.stdout}")
-            # Versuche erneut, den Schlüssel hinzuzufügen
             subprocess.run(['ssh-add', ssh_key_path], check=True)
             logger.debug(f"SSH-Schlüssel {ssh_key_path} nach Agent-Neustart hinzugefügt")
 
-        # Teste die SSH-Verbindung zu GitHub
         result = subprocess.run(['ssh', '-T', 'git@github.com'], capture_output=True, text=True)
         if "successfully authenticated" in result.stderr or result.returncode == 0:
             logger.debug("SSH-Verbindung zu GitHub erfolgreich")
@@ -1243,8 +1338,7 @@ def setup_git() -> bool:
         return False
 
 def upload_to_github():
-    """Lädt die Hosts-Datei auf GitHub hoch, wenn aktiviert"""
-    if not CONFIG['github_upload']:
+    if not CONFIG['github_upload'] or global_mode == SystemMode.EMERGENCY:
         logger.info("GitHub-Upload deaktiviert")
         return
     hosts_file = os.path.join(SCRIPT_DIR, CONFIG['hosts_file'])
@@ -1288,20 +1382,29 @@ def upload_to_github():
 async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.ClientSession) -> tuple[int, int, int]:
     """Verarbeitet eine Blockliste und extrahiert Domains"""
     try:
+        if global_mode == SystemMode.EMERGENCY:
+            log_once(logging.WARNING, f"Emergency-Mode: Liste {url} wird übersprungen, um Ressourcen zu sparen")
+            return 0, 0, 0
+
         logger.debug(f"Verarbeite Liste: {url}")
-        async with session.get(url, timeout=30) as response:
+        async with session.get(url, timeout=CONFIG['http_timeout']) as response:
+            logger.debug(f"HTTP-Status für {url}: {response.status}")
             if response.status == 404:
                 logger.error(f"Liste {url} nicht gefunden (404)")
                 STATISTICS['failed_lists'] += 1
                 return 0, 0, 0
-            if response.status >= 500:
-                logger.warning(f"Serverfehler bei {url} (Status {response.status})")
-                raise aiohttp.ClientError(f"Serverfehler: {response.status}")
+            if response.status >= 400:
+                logger.error(f"Fehler beim Abrufen der Liste {url}: HTTP-Status {response.status}, Grund: {response.reason}")
+                STATISTICS['failed_lists'] += 1
+                raise aiohttp.ClientError(f"HTTP-Fehler: {response.status} {response.reason}")
             response.raise_for_status()
             content = await response.text()
+        logger.debug(f"Inhalt von {url} heruntergeladen, Länge: {len(content)} Zeichen")
         if not content.strip():
             logger.warning(f"Liste {url} ist leer")
             return 0, 0, 0
+        sample_lines = '\n'.join(content.splitlines()[:5])
+        logger.debug(f"Erste Zeilen von {url}:\n{sample_lines}")
         current_md5 = calculate_md5(content)
         list_cache = cache_manager.load_list_cache()
         temp_file = os.path.join(TMP_DIR, f"{url.replace('://', '__').replace('/', '__')}.tmp")
@@ -1312,7 +1415,7 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
                 async with aiofiles.open(filtered_file, 'r', encoding='utf-8') as f:
                     unique_count = sum(1 for _ in await f.readlines() if _.strip())
                 return unique_count, unique_count, 0
-        trie = DomainTrie()
+        trie = DomainTrie(url)
         domain_count = 0
         unique_count = 0
         subdomain_count = 0
@@ -1324,9 +1427,9 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
                 free_memory = psutil.virtual_memory().available
                 trie.storage.update_threshold()
                 _, batch_size, _ = get_system_resources()
-                batch_size = min(batch_size, 50)  # Begrenze Batch-Größe auf 50
-                if free_memory < 50 * 1024 * 1024:
-                    logger.warning(f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, pausiere Verarbeitung")
+                batch_size = min(batch_size, 20 if global_mode == SystemMode.EMERGENCY else 50)
+                if free_memory < CONFIG['resource_thresholds']['emergency_memory_mb'] * 1024 * 1024:
+                    log_once(logging.WARNING, f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, pausiere Verarbeitung")
                     await asyncio.sleep(5)
                 if domain in seen_domains:
                     duplicate_count += 1
@@ -1336,6 +1439,8 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
                 batch.append(domain)
                 domain_count += 1
                 if len(batch) >= batch_size:
+                    free_memory = psutil.virtual_memory().available
+                    logger.debug(f"Verarbeite Batch von {len(batch)} Domains, Speicher: {free_memory/(1024*1024):.2f} MB")
                     for d in batch:
                         if CONFIG['remove_redundant_subdomains'] and trie.has_parent(d):
                             subdomain_count += 1
@@ -1345,14 +1450,16 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
                     await f_temp.write('\n'.join(batch) + '\n')
                     batch = []
                     trie.flush()
-                    gc.collect()  # Häufigere Garbage Collection
-                    logger.debug(f"Batch von {batch_size} Domains gespeichert, Speicher: {free_memory/(1024*1024):.2f} MB")
+                    gc.collect()
+                    logger.debug(f"Batch gespeichert, Speicher nach GC: {psutil.virtual_memory().available/(1024*1024):.2f} MB")
                 if domain_count % 1000 == 0:
                     memory = psutil.Process().memory_info().rss / (1024 * 1024)
                     logger.debug(f"Verarbeite {url}: {domain_count} Domains, Speicher: {memory:.2f} MB")
-                    trie.flush()  # Zusätzliches Flushen bei großen Listen
+                    trie.flush()
                     gc.collect()
             if batch:
+                free_memory = psutil.virtual_memory().available
+                logger.debug(f"Verarbeite finalen Batch von {len(batch)} Domains, Speicher: {free_memory/(1024*1024):.2f} MB")
                 for d in batch:
                     if CONFIG['remove_redundant_subdomains'] and trie.has_parent(d):
                         subdomain_count += 1
@@ -1360,6 +1467,8 @@ async def process_list(url: str, cache_manager: CacheManager, session: aiohttp.C
                         await f_filtered.write(d + '\n')
                         unique_count += 1
                 await f_temp.write('\n'.join(batch) + '\n')
+                gc.collect()
+                logger.debug(f"Finaler Batch gespeichert, Speicher nach GC: {psutil.virtual_memory().available/(1024*1024):.2f} MB")
         list_cache[url] = {"md5": current_md5, "last_checked": datetime.now().isoformat()}
         cache_manager.save_list_cache(list_cache)
         trie.close()
@@ -1384,110 +1493,80 @@ async def main():
     """Hauptfunktion des Skripts"""
     cache_flush_task = None
     resource_monitor_task = None
+    global cache_manager, global_mode
     try:
         start_time = time.time()
         logger.info("Starte AdBlock-Skript")
         free_memory = psutil.virtual_memory().available / (1024 * 1024)
         logger.debug(f"Freier Speicher: {free_memory:.2f} MB")
-        if free_memory < 50:
-            logger.warning(f"Kritischer Speicherstand vor Start: {free_memory:.2f} MB frei, aktiviere Low-Memory-Modus")
+
         logger.debug("Lade Konfiguration...")
-        try:
-            load_config()
-        except Exception as e:
-            logger.error(f"Fehler beim Laden der Konfiguration: {e}")
-            raise
+        load_config()
         logger.debug("Konfiguration geladen")
+
+        if free_memory < CONFIG['resource_thresholds']['emergency_memory_mb']:
+            log_once(logging.WARNING, f"Kritischer Speicherstand vor Start: {free_memory:.2f} MB frei, aktiviere Emergency-Mode")
+            global_mode = SystemMode.EMERGENCY
+        elif free_memory < CONFIG['resource_thresholds']['low_memory_mb']:
+            log_once(logging.WARNING, f"Niedriger Speicherstand vor Start: {free_memory:.2f} MB frei, aktiviere Low-Memory-Mode")
+            global_mode = SystemMode.LOW_MEMORY
+        else:
+            global_mode = SystemMode.NORMAL
+
         logger.debug("Richte Logging ein...")
-        try:
-            setup_logging()
-        except Exception as e:
-            logger.error(f"Fehler beim Einrichten des Loggings: {e}")
-            raise
+        setup_logging()
         logger.debug("Logging eingerichtet")
+
         logger.debug(f"Erstelle temporäres Verzeichnis: {TMP_DIR}")
-        try:
-            os.makedirs(TMP_DIR, exist_ok=True)
-        except Exception as e:
-            logger.error(f"Fehler beim Erstellen des temporären Verzeichnisses {TMP_DIR}: {e}")
-            raise
+        os.makedirs(TMP_DIR, exist_ok=True)
         logger.debug("Temporäres Verzeichnis erstellt")
-        global cache_manager
+
         logger.debug("Initialisiere CacheManager...")
-        try:
-            cache_manager = CacheManager(DB_PATH, CONFIG['cache_flush_interval'])
-        except Exception as e:
-            logger.error(f"Fehler beim Initialisieren des CacheManagers: {e}")
-            raise
+        cache_manager = CacheManager(DB_PATH, CONFIG['cache_flush_interval'])
+        if cache_manager is None:
+            raise ValueError("CacheManager konnte nicht initialisiert werden")
         logger.debug("CacheManager initialisiert")
+
         logger.debug("Initialisiere Verzeichnisse und Dateien...")
-        try:
-            initialize_directories_and_files()
-        except Exception as e:
-            logger.error(f"Fehler beim Initialisieren der Verzeichnisse und Dateien: {e}")
-            raise
+        initialize_directories_and_files()
         logger.debug("Verzeichnisse und Dateien initialisiert")
+
         logger.debug("Bereinige temporäre Dateien...")
-        try:
-            cleanup_temp_files(cache_manager)
-        except Exception as e:
-            logger.error(f"Fehler beim Bereinigen temporärer Dateien: {e}")
-            raise
+        cleanup_temp_files(cache_manager)
         logger.debug("Temporäre Dateien bereinigt")
+
         memory = psutil.Process().memory_info().rss / (1024 * 1024)
         logger.info(f"Initialer Speicherverbrauch: {memory:.2f} MB")
+
         logger.debug("Starte Cache-Flush- und Ressourcenüberwachungs-Tasks...")
-        try:
-            cache_flush_task = asyncio.create_task(cache_manager.flush_cache_periodically())
-            resource_monitor_task = asyncio.create_task(monitor_resources(cache_manager))
-        except Exception as e:
-            logger.error(f"Fehler beim Starten der Cache-Flush- und Ressourcenüberwachungs-Tasks: {e}")
-            raise
+        cache_flush_task = asyncio.create_task(cache_manager.flush_cache_periodically())
+        resource_monitor_task = asyncio.create_task(monitor_resources(cache_manager))
         logger.debug("Cache-Flush- und Ressourcenüberwachungs-Tasks gestartet")
+
         if CONFIG['github_upload']:
             logger.debug("Git-Upload aktiviert, verwende manuelle Git-Konfiguration")
         else:
             logger.debug("Git-Upload deaktiviert")
+
         logger.debug("Lade Quell-URLs...")
-        try:
-            sources = load_hosts_sources()
-        except Exception as e:
-            logger.error(f"Fehler beim Laden der Quell-URLs: {e}")
-            raise
+        sources = load_hosts_sources()
         if not sources:
             logger.error("Keine Quell-URLs in hosts_sources.conf gefunden")
-            send_email("Fehler im AdBlock-Skript", "Keine Quell-URLs in hosts_sources.conf gefunden")
-            if cache_flush_task:
-                cache_flush_task.cancel()
-                try:
-                    await cache_flush_task
-                except asyncio.CancelledError:
-                    logger.debug("cache_flush_task erfolgreich abgebrochen")
-            if resource_monitor_task:
-                resource_monitor_task.cancel()
-                try:
-                    await resource_monitor_task
-                except asyncio.CancelledError:
-                    logger.debug("resource_monitor_task erfolgreich abgebrochen")
-            return
+            if global_mode != SystemMode.EMERGENCY:
+                send_email("Fehler im AdBlock-Skript", "Keine Quell-URLs in hosts_sources.conf gefunden")
+            raise ValueError("Keine Quell-URLs gefunden")
         logger.debug(f"Geladene Quell-URLs: {len(sources)}")
+
         logger.debug("Lade Whitelist und Blacklist...")
-        try:
-            whitelist, blacklist = load_whitelist_blacklist()
-        except Exception as e:
-            logger.error(f"Fehler beim Laden von Whitelist/Blacklist: {e}")
-            raise
+        whitelist, blacklist = load_whitelist_blacklist()
         logger.debug(f"Whitelist: {len(whitelist)} Einträge, Blacklist: {len(blacklist)} Einträge")
+
         url_counts = {}
         processed_urls = []
         logger.debug("Starte Verarbeitung der Blocklisten...")
         async with aiohttp.ClientSession() as session:
             logger.debug("Wähle beste DNS-Server...")
-            try:
-                dns_servers = await select_best_dns_server(CONFIG['dns_servers'])
-            except Exception as e:
-                logger.error(f"Fehler beim Auswählen der DNS-Server: {e}")
-                raise
+            dns_servers = await select_best_dns_server(CONFIG['dns_servers'])
             resolver = aiodns.DNSResolver(nameservers=dns_servers, timeout=CONFIG['domain_timeout'])
             logger.debug("DNS-Server ausgewählt")
             max_jobs, _, _ = get_system_resources()
@@ -1507,23 +1586,12 @@ async def main():
                     logger.info(f"Verarbeitet {url}: {unique} Domains")
                     memory = psutil.Process().memory_info().rss / (1024 * 1024)
                     logger.debug(f"Speicherverbrauch nach {url}: {memory:.2f} MB")
-                    gc.collect()  # Häufigere Garbage Collection
+                    gc.collect()
         if not processed_urls:
             logger.error("Keine gültigen Domains gefunden")
-            send_email("Fehler im AdBlock-Skript", "Keine gültigen Domains gefunden")
-            if cache_flush_task:
-                cache_flush_task.cancel()
-                try:
-                    await cache_flush_task
-                except asyncio.CancelledError:
-                    logger.debug("cache_flush_task erfolgreich abgebrochen")
-            if resource_monitor_task:
-                resource_monitor_task.cancel()
-                try:
-                    await resource_monitor_task
-                except asyncio.CancelledError:
-                    logger.debug("resource_monitor_task erfolgreich abgebrochen")
-            return
+            if global_mode != SystemMode.EMERGENCY:
+                send_email("Fehler im AdBlock-Skript", "Keine gültigen Domains gefunden")
+            raise ValueError("Keine gültigen Domains gefunden")
         STATISTICS['total_domains'] = sum(counts['total'] for counts in url_counts.values())
         STATISTICS['unique_domains'] = sum(counts['unique'] for counts in url_counts.values())
         logger.debug("Statistiken berechnet")
@@ -1561,9 +1629,9 @@ async def main():
                                 domains = []
                                 memory = psutil.Process().memory_info().rss / (1024 * 1024)
                                 logger.debug(f"Speicherverbrauch nach Batch ({url}): {memory:.2f} MB")
-                                gc.collect()  # Häufigere Garbage Collection
-                                if free_memory < 50 * 1024 * 1024:
-                                    logger.warning(f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, reduziere Cache")
+                                gc.collect()
+                                if free_memory < CONFIG['resource_thresholds']['emergency_memory_mb'] * 1024 * 1024:
+                                    log_once(logging.WARNING, f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, reduziere Cache")
                                     cache_manager.current_cache_size = max(2, cache_manager.current_cache_size // 2)
                                     cache_manager.adjust_cache_size()
                                     cache_manager.domain_cache.use_ram = False
@@ -1583,18 +1651,18 @@ async def main():
         logger.debug("Listen bewertet")
         sorted_domains = []
         async with aiofiles.open(REACHABLE_FILE, 'r', encoding='utf-8') as f:
-            sorted_domains = sorted([line.strip() async for line in f if line.strip()])
+            sorted_domains = sorted([line.strip() async for line in f if line.strip() and line.strip() != ''])
         logger.debug(f"Anzahl der erreichbaren Domains: {len(sorted_domains)}")
         logger.debug(f"Erste 5 erreichbare Domains (Beispiel): {sorted_domains[:5]}")
         dnsmasq_lines = []
         if CONFIG['use_ipv4_output']:
             dnsmasq_lines.extend(f"address=/{domain}/{CONFIG['web_server_ipv4']}" for domain in sorted_domains)
             logger.debug(f"IPv4-Ausgabe aktiviert, {len(dnsmasq_lines)} Einträge für dnsmasq.conf mit IPv4")
-        if CONFIG['use_ipv6_output'] and is_ipv6_supported():
+        if CONFIG['use_ipv6_output'] and await is_ipv6_supported():
             dnsmasq_lines.extend(f"address=/{domain}/{CONFIG['web_server_ipv6']}" for domain in sorted_domains)
             logger.debug(f"IPv6-Ausgabe aktiviert, {len(dnsmasq_lines)} Einträge für dnsmasq.conf mit IPv6")
         dnsmasq_content = '\n'.join(dnsmasq_lines)
-        hosts_content = '\n'.join(f"{CONFIG['hosts_ip']} {domain}" for domain in sorted_domains)
+        hosts_content = '\n'.join(f"{CONFIG['hosts_ip']} {domain}" for domain in sorted_domains if domain).strip()
         logger.debug(f"Schreibe {len(sorted_domains)} Domains in hosts.txt mit IP {CONFIG['hosts_ip']}")
         async with aiofiles.open(os.path.join(SCRIPT_DIR, CONFIG['dns_config_file']), 'w', encoding='utf-8') as f:
             await f.write(dnsmasq_content)
@@ -1605,11 +1673,12 @@ async def main():
                 unreachable_domains = sorted([line.strip() async for line in f if line.strip()])
             async with aiofiles.open(os.path.join(TMP_DIR, 'unreachable.txt'), 'w', encoding='utf-8') as f:
                 await f.write('\n'.join(unreachable_domains))
-        if CONFIG['github_upload']:
+        if CONFIG['github_upload'] and global_mode != SystemMode.EMERGENCY:
             upload_to_github()
         safe_save(os.path.join(TMP_DIR, 'statistics.json'), STATISTICS, is_json=True)
-        export_statistics_csv()
-        export_prometheus_metrics(start_time)
+        if global_mode != SystemMode.EMERGENCY:
+            export_statistics_csv()
+            export_prometheus_metrics(start_time)
         recommendations = '\n'.join(STATISTICS['list_recommendations']) if STATISTICS['list_recommendations'] else "Keine Empfehlungen"
         summary = f"""
 AdBlock-Skript Zusammenfassung (Laufzeit: {time.time() - start_time:.2f}s):
@@ -1631,7 +1700,8 @@ Empfehlungen:
 """
         logger.info("Zusammenfassung erfolgreich erstellt")
         logger.info(summary)
-        send_email("AdBlock-Skript Bericht", summary)
+        if CONFIG.get('send_email', False) and global_mode != SystemMode.EMERGENCY:
+            send_email("AdBlock-Skript Bericht", summary)
         try:
             subprocess.run(['systemctl', 'restart', 'dnsmasq'], check=True)
             logger.info("DNSMasq erfolgreich neu gestartet")
@@ -1642,11 +1712,13 @@ Empfehlungen:
                 logger.info("DNSMasq erfolgreich via service neu gestartet")
             except subprocess.CalledProcessError as e:
                 logger.error(f"Fehler beim Neustarten von DNSMasq: {e}")
-                send_email("Fehler im AdBlock-Skript", f"DNSMasq-Neustart fehlgeschlagen: {e}")
+                if global_mode != SystemMode.EMERGENCY:
+                    send_email("Fehler im AdBlock-Skript", f"DNSMasq-Neustart fehlgeschlagen: {e}")
         logger.info("Skript erfolgreich abgeschlossen")
     except Exception as e:
         logger.error(f"Kritischer Fehler in der Hauptfunktion: {e}")
-        send_email("Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}")
+        if global_mode != SystemMode.EMERGENCY:
+            send_email("Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}")
         if cache_flush_task:
             cache_flush_task.cancel()
             try:
@@ -1673,8 +1745,9 @@ Empfehlungen:
                 await resource_monitor_task
             except asyncio.CancelledError:
                 logger.debug("resource_monitor_task erfolgreich abgebrochen")
-        async with cache_flush_lock:
-            cache_manager.save_domain_cache()
+        if cache_manager:
+            async with cache_flush_lock:
+                cache_manager.save_domain_cache()
 
 if __name__ == "__main__":
     try:
@@ -1685,9 +1758,11 @@ if __name__ == "__main__":
         sys.exit(0)
     except MemoryError:
         logger.error("Skript abgebrochen: Nicht genügend Speicher verfügbar")
-        send_email("Kritischer Fehler im AdBlock-Skript", "Skript abgebrochen: Nicht genügend Speicher verfügbar")
+        if global_mode != SystemMode.EMERGENCY:
+            send_email("Kritischer Fehler im AdBlock-Skript", "Skript abgebrochen: Nicht genügend Speicher verfügbar")
         sys.exit(1)
     except Exception as e:
         logger.error(f"Kritischer Fehler beim Start des Skripts: {e}")
-        send_email("Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}")
+        if global_mode != SystemMode.EMERGENCY:
+            send_email("Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}")
         sys.exit(1)
