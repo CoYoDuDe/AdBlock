@@ -21,7 +21,7 @@ DOMAIN_VALIDATOR = re.compile(
 )
 
 DEFAULT_CONFIG = {
-    "log_file": "/var/log/adblock.log",
+    "log_file": "./logs/adblock.log",
     "log_format": "text",
     "max_retries": 3,
     "retry_delay": 2,
