@@ -18,7 +18,7 @@ python adblock.py
 ## 🔧 Voraussetzungen
 
 - Python 3.8+
-- `requests`, `tqdm`, `re`, `os` (Standard oder per `requirements.txt`)
+- `requests`, `re`, `os` (Standard oder per `requirements.txt`)
 - Setze die Umgebungsvariable `SMTP_PASSWORD`, falls SMTP-E-Mails aktiviert sind
 
 ## 🛠️ Setup
