@@ -145,7 +145,6 @@ DEFAULT_CONFIG = {
     "smtp_server": "smtp.example.com",
     "smtp_port": 587,
     "smtp_user": "",
-    "smtp_password": "",
     "remove_redundant_subdomains": True,
     "export_prometheus": False,
     "category_weights": {"malware": 1.5, "adult": 1.2, "ads": 1.0, "unknown": 0.8},
