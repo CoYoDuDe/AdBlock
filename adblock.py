@@ -42,7 +42,7 @@ from config import (
     TRIE_CACHE_PATH,
     UNREACHABLE_FILE,
 )
-from filter_engine import categorize_list, parse_domains
+from filter_engine import evaluate_lists, parse_domains
 from source_loader import load_hosts_sources, load_whitelist_blacklist
 
 
@@ -1365,70 +1365,6 @@ async def test_domain_batch(
         return []
 
 
-def evaluate_lists(url_counts: Dict[str, Dict], total_domains: int):
-    try:
-        free_memory = psutil.virtual_memory().available
-        _, batch_size, _ = get_system_resources()
-        logger.debug(
-            f"Batch-Größe für evaluate_lists: {batch_size}, Freier RAM: {free_memory/(1024*1024):.2f} MB"
-        )
-        url_batches = [
-            list(STATISTICS["list_stats"].items())[i : i + batch_size]
-            for i in range(0, len(STATISTICS["list_stats"]), batch_size)
-        ]
-        for batch in url_batches:
-            for url, stats in batch:
-                counts = url_counts.get(url, {"total": 0, "unique": 0, "subdomains": 0})
-                stats["total"] = counts["total"]
-                stats["unique"] = counts["unique"]
-                stats["subdomains"] = counts["subdomains"]
-                stats["category"] = categorize_list(url)
-                if stats["total"] > 0:
-                    unique_ratio = stats["unique"] / stats["total"]
-                    reachable_ratio = (
-                        stats["reachable"] / (stats["reachable"] + stats["unreachable"])
-                        if stats["reachable"] + stats["unreachable"] > 0
-                        else 0
-                    )
-                    category_weight = CONFIG["category_weights"].get(
-                        stats["category"], 1.0
-                    )
-                    subdomain_ratio = (
-                        stats["subdomains"] / stats["total"]
-                        if stats["total"] > 0
-                        else 0
-                    )
-                    stats["score"] = (
-                        unique_ratio * 0.4
-                        + reachable_ratio * 0.3
-                        + (1 if url in CONFIG["priority_lists"] else 0) * 0.1
-                        - subdomain_ratio * 0.1
-                    ) * category_weight
-                else:
-                    stats["score"] = 0.0
-                if stats["unique"] == 0 and stats["total"] > 0:
-                    STATISTICS["list_recommendations"].append(
-                        f"Entfernen Sie {url}: Keine einzigartigen Domains."
-                    )
-                elif stats["score"] < 0.2 and stats["total"] > 50:
-                    STATISTICS["list_recommendations"].append(
-                        f"Überprüfen Sie {url}: Niedriger Score ({stats['score']:.2f}), wenig Nutzen."
-                    )
-                elif stats["subdomains"] / stats["total"] > 0.5 and stats["total"] > 50:
-                    STATISTICS["list_recommendations"].append(
-                        f"Überprüfen Sie {url}: Hoher Subdomain-Anteil "
-                        f"({stats['subdomains']/stats['total']:.2f})."
-                    )
-                logger.info(
-                    f"Liste {url} ({stats['category']}): Score={stats['score']:.2f}, "
-                    f"Einzigartig={stats['unique']}, Total={stats['total']}, "
-                    f"Subdomains={stats['subdomains']}"
-                )
-            gc.collect()
-    except Exception as e:
-        logger.error(f"Fehler beim Bewerten der Listen: {e}")
-
-
 def setup_git() -> bool:
     try:
         # Prüfe, ob git installiert ist
@@ -1958,7 +1894,7 @@ async def main():
                             else:
                                 await f_unreachable.write(domain + "\n")
                                 STATISTICS["unreachable_domains"] += 1
-        evaluate_lists(url_counts, STATISTICS["total_domains"])
+        evaluate_lists(url_counts, STATISTICS, CONFIG)
         logger.debug("Listen bewertet")
         sorted_domains = []
         async with aiofiles.open(REACHABLE_FILE, "r", encoding="utf-8") as f:
