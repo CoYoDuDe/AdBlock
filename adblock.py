@@ -9,6 +9,7 @@ import psutil
 import time
 import subprocess
 import hashlib
+import re
 import json
 from collections import defaultdict, deque
 import asyncio
@@ -33,27 +34,20 @@ from enum import Enum
 import idna
 from pybloom_live import ScalableBloomFilter
 
-from config import (
-    DB_PATH,
-    DEFAULT_CONFIG,
-    DOMAIN_PATTERN,
-    DOMAIN_VALIDATOR,
-    HOSTS_HASH_PATH,
-    LOG_FORMAT,
-    MAX_DNS_CACHE_SIZE,
-    REACHABLE_FILE,
-    SCRIPT_DIR,
-    TMP_DIR,
-    TRIE_CACHE_PATH,
-    UNREACHABLE_FILE,
-)
-
 
 class SystemMode(Enum):
     NORMAL = "normal"
     LOW_MEMORY = "low_memory"
     EMERGENCY = "emergency"
 
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+TMP_DIR = os.path.join(SCRIPT_DIR, "tmp")
+DB_PATH = os.path.join(TMP_DIR, "adblock_cache.db")
+HOSTS_HASH_PATH = os.path.join(TMP_DIR, "hosts_hash.txt")
+TRIE_CACHE_PATH = os.path.join(TMP_DIR, "trie_cache.pkl")
+REACHABLE_FILE = os.path.join(TMP_DIR, "reachable.txt")
+UNREACHABLE_FILE = os.path.join(TMP_DIR, "unreachable.txt")
 
 CONFIG = {}
 DNS_CACHE = {}
@@ -105,7 +99,79 @@ STATISTICS = {
     "domain_sources": {},
 }
 
+
+DEFAULT_CONFIG = {
+    "log_file": "/var/log/adblock.log",
+    "log_format": "text",
+    "max_retries": 3,
+    "retry_delay": 2,
+    "dns_retry_strategy": "exponential",
+    "dns_config_file": "dnsmasq.conf",
+    "hosts_file": "hosts.txt",
+    "hosts_ip": "0.0.0.0",
+    "web_server_ipv4": "127.0.0.1",
+    "web_server_ipv6": "::1",
+    "use_ipv4_output": True,
+    "use_ipv6_output": False,
+    "github_upload": False,
+    "github_repo": "git@github.com:example/repo.git",
+    "github_branch": "main",
+    "git_user": "",
+    "git_email": "",
+    "dns_servers": [
+        "8.8.8.8",
+        "8.8.4.4",
+        "1.1.1.1",
+        "1.0.0.1",
+        "2001:4860:4860::8888",
+        "2001:4860:4860::8844",
+        "2606:4700:4700::1111",
+        "2606:4700:4700::1001",
+    ],
+    "logging_level": "INFO",
+    "detailed_log": False,
+    "save_unreachable": True,
+    "prioritize_lists": True,
+    "domain_timeout": 3,
+    "domain_cache_validity_days": 7,
+    "cache_flush_interval": 300,
+    "cache_trie": True,
+    "always_check_all_domains": False,
+    "priority_lists": [],
+    "send_email": False,
+    "use_smtp": True,
+    "email_recipient": "example@example.com",
+    "email_sender": "no-reply@example.com",
+    "smtp_server": "smtp.example.com",
+    "smtp_port": 587,
+    "smtp_user": "",
+    "smtp_password": "",
+    "remove_redundant_subdomains": True,
+    "export_prometheus": False,
+    "category_weights": {"malware": 1.5, "adult": 1.2, "ads": 1.0, "unknown": 0.8},
+    "use_bloom_filter": True,
+    "bloom_filter_capacity": 10000000,
+    "bloom_filter_error_rate": 0.001,
+    "http_timeout": 60,
+    "resource_thresholds": {
+        "low_memory_mb": 150,
+        "emergency_memory_mb": 50,
+        "high_cpu_percent": 90,
+        "high_latency_s": 5.0,
+        "moving_average_window": 5,
+        "consecutive_violations": 2,
+    },
+}
+
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logger = logging.getLogger(__name__)
+
+DOMAIN_PATTERN = re.compile(
+    r"^(?:0\.0\.0\.0|127\.0\.0\.1|::1|[0-9a-fA-F:]+)\s+(\S+)|^\s*(\S+)|^\|\|([^\^]+)\^$"
+)
+DOMAIN_VALIDATOR = re.compile(
+    r"^(?!-|\.)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+)
 
 
 class HybridStorage:
@@ -126,7 +192,8 @@ class HybridStorage:
         self.ram_threshold = self.calculate_threshold()
         self.use_ram = self.should_use_ram()
         logger.debug(
-            f"HybridStorage initialisiert: RAM-Speicher={self.use_ram}, Pfad={db_path}, Schwellwert={self.ram_threshold/(1024*1024):.2f} MB"
+            f"HybridStorage initialisiert: RAM-Speicher={self.use_ram}, "
+            f"Pfad={db_path}, Schwellwert={self.ram_threshold/(1024*1024):.2f} MB"
         )
 
     def calculate_threshold(self) -> int:
@@ -509,7 +576,8 @@ class CacheManager:
                 if free_memory < 50 or psutil.virtual_memory().percent > 90:
                     log_once(
                         logging.WARNING,
-                        f"Kritischer Speicherstand: {free_memory:.2f} MB frei, Auslastung: {psutil.virtual_memory().percent}%, reduziere Cache",
+                        f"Kritischer Speicherstand: {free_memory:.2f} MB frei, "
+                        f"Auslastung: {psutil.virtual_memory().percent}%, reduziere Cache",
                         console=True,
                     )
                     self.current_cache_size = max(2, self.current_cache_size // 2)
@@ -525,7 +593,8 @@ class CacheManager:
                         console=True,
                     )
                 logger.debug(
-                    f"Speicherverbrauch: {memory:.2f} MB, CPU: {cpu_usage}%, Cache-Größe: {self.current_cache_size}, RAM-Speicher: {self.domain_cache.use_ram}"
+                    f"Speicherverbrauch: {memory:.2f} MB, CPU: {cpu_usage}%, "
+                    f"Cache-Größe: {self.current_cache_size}, RAM-Speicher: {self.domain_cache.use_ram}"
                 )
                 if time.time() - self.last_flush > self.flush_interval:
                     async with cache_flush_lock:
@@ -820,7 +889,8 @@ def setup_logging():
         if CONFIG.get("log_format") == "json":
             handler.setFormatter(
                 logging.Formatter(
-                    '{"time": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s", "operation": "%(funcName)s"}'
+                    '{"time": "%(asctime)s", "level": "%(levelname)s", "message": "%(message)s", '
+                    '"operation": "%(funcName)s"}'
                 )
             )
         else:
@@ -1267,7 +1337,8 @@ async def monitor_resources(cache_manager: CacheManager):
                 ):
                     log_once(
                         logging.WARNING,
-                        f"Wenig RAM verfügbar: Durchschnitt {avg_memory:.2f} MB, Batch-Größe: {batch_size}, DNS-Anfragen: {max_concurrent_dns}",
+                        f"Wenig RAM verfügbar: Durchschnitt {avg_memory:.2f} MB, "
+                        f"Batch-Größe: {batch_size}, DNS-Anfragen: {max_concurrent_dns}",
                         console=True,
                     )
                     resource_state["low_memory"] = True
@@ -1377,11 +1448,7 @@ def get_system_resources() -> tuple[int, int, int]:
             max_jobs = 1
             batch_size = 5
             max_concurrent_dns = 5
-            log_once(
-                logging.WARNING,
-                "Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5",
-                console=True,
-            )
+            log_once(logging.WARNING, "Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5", console=True)
         elif global_mode == SystemMode.LOW_MEMORY:
             max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 4)
             batch_size = max(5, min(20, int(free_memory / (1000 * 1024))))
@@ -1392,12 +1459,22 @@ def get_system_resources() -> tuple[int, int, int]:
                 console=True,
             )
         else:
-            max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 2)
-            batch_size = max(10, min(50, int(free_memory / (500 * 1024))))
-            max_concurrent_dns = max(5, min(20, int(free_memory / (1024 * 1024))))
+            max_jobs = max(
+                1,
+                int(cpu_cores / (cpu_load + 0.1)) // 2,
+            )
+            batch_size = max(
+                10,
+                min(50, int(free_memory / (500 * 1024))),
+            )
+            max_concurrent_dns = max(
+                5,
+                min(20, int(free_memory / (1024 * 1024))),
+            )
 
         logger.debug(
-            f"CPU-Last: {cpu_load:.2f}, Kerne: {cpu_cores}, Speicher: {free_memory/(1024*1024):.2f} MB, Modus: {global_mode.value}"
+            f"CPU-Last: {cpu_load:.2f}, Kerne: {cpu_cores}, "
+            f"Speicher: {free_memory/(1024*1024):.2f} MB, Modus: {global_mode.value}"
         )
         logger.debug(
             f"Empfohlene Jobs: {max_jobs}, Batch-Größe: {batch_size}, DNS-Anfragen: {max_concurrent_dns}"
@@ -1524,7 +1601,9 @@ async def test_domain_batch(
         cache_manager.domain_cache.update_threshold()
         _, batch_size, max_concurrent = get_system_resources()
         logger.debug(
-            f"Batch-Größe für DNS-Validierung: {batch_size}, Max. DNS-Anfragen: {max_concurrent}, Freier RAM: {free_memory/(1024*1024):.2f} MB"
+            f"Batch-Größe für DNS-Validierung: {batch_size}, "
+            f"Max. DNS-Anfragen: {max_concurrent}, "
+            f"Freier RAM: {free_memory/(1024*1024):.2f} MB"
         )
         results = []
         tasks = [
@@ -1602,10 +1681,13 @@ def evaluate_lists(url_counts: Dict[str, Dict], total_domains: int):
                     )
                 elif stats["subdomains"] / stats["total"] > 0.5 and stats["total"] > 50:
                     STATISTICS["list_recommendations"].append(
-                        f"Überprüfen Sie {url}: Hoher Subdomain-Anteil ({stats['subdomains']/stats['total']:.2f})."
+                        f"Überprüfen Sie {url}: Hoher Subdomain-Anteil "
+                        f"({stats['subdomains']/stats['total']:.2f})."
                     )
                 logger.info(
-                    f"Liste {url} ({stats['category']}): Score={stats['score']:.2f}, Einzigartig={stats['unique']}, Total={stats['total']}, Subdomains={stats['subdomains']}"
+                    f"Liste {url} ({stats['category']}): Score={stats['score']:.2f}, "
+                    f"Einzigartig={stats['unique']}, Total={stats['total']}, "
+                    f"Subdomains={stats['subdomains']}"
                 )
             gc.collect()
     except Exception as e:
@@ -1712,7 +1794,10 @@ def upload_to_github():
             text=True,
             cwd=SCRIPT_DIR,
         )
-        commit_msg = f"Update hosts.txt: {STATISTICS['reachable_domains']} Domains, {STATISTICS['unique_domains']} einzigartig"
+        commit_msg = (
+            f"Update hosts.txt: {STATISTICS['reachable_domains']} Domains, "
+            f"{STATISTICS['unique_domains']} einzigartig"
+        )
         result = subprocess.run(
             ["git", "commit", "-m", commit_msg],
             check=True,
@@ -1874,7 +1959,8 @@ async def process_list(
                 await f_temp.write("\n".join(batch) + "\n")
                 gc.collect()
                 logger.debug(
-                    f"Finaler Batch gespeichert, Speicher nach GC: {psutil.virtual_memory().available/(1024*1024):.2f} MB"
+                    "Finaler Batch gespeichert, Speicher nach GC: "
+                    f"{psutil.virtual_memory().available/(1024*1024):.2f} MB"
                 )
         list_cache[url] = {
             "md5": current_md5,
@@ -2106,7 +2192,8 @@ async def main():
                                 ):
                                     log_once(
                                         logging.WARNING,
-                                        f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, reduziere Cache",
+                                        f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, "
+                                        f"reduziere Cache",
                                         console=True,
                                     )
                                     cache_manager.current_cache_size = max(
@@ -2244,21 +2331,7 @@ Empfehlungen:
     except Exception as e:
         logger.error(f"Kritischer Fehler in der Hauptfunktion: {e}")
         if global_mode != SystemMode.EMERGENCY:
-            send_email(
-                "Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}"
-            )
-        if cache_flush_task:
-            cache_flush_task.cancel()
-            try:
-                await cache_flush_task
-            except asyncio.CancelledError:
-                logger.debug("cache_flush_task erfolgreich abgebrochen")
-        if resource_monitor_task:
-            resource_monitor_task.cancel()
-            try:
-                await resource_monitor_task
-            except asyncio.CancelledError:
-                logger.debug("resource_monitor_task erfolgreich abgebrochen")
+            send_email("Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}")
         sys.exit(1)
     finally:
         if cache_flush_task:
