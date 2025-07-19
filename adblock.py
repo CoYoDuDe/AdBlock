@@ -9,7 +9,6 @@ import psutil
 import time
 import subprocess
 import hashlib
-import re
 import json
 from collections import defaultdict, deque
 import asyncio
@@ -33,6 +32,20 @@ import aiofiles
 from enum import Enum
 import idna
 from pybloom_live import ScalableBloomFilter
+from config import (
+    DB_PATH,
+    DEFAULT_CONFIG,
+    DOMAIN_PATTERN,
+    DOMAIN_VALIDATOR,
+    HOSTS_HASH_PATH,
+    LOG_FORMAT,
+    MAX_DNS_CACHE_SIZE,
+    REACHABLE_FILE,
+    SCRIPT_DIR,
+    TMP_DIR,
+    TRIE_CACHE_PATH,
+    UNREACHABLE_FILE,
+)
 
 
 class SystemMode(Enum):
@@ -40,14 +53,6 @@ class SystemMode(Enum):
     LOW_MEMORY = "low_memory"
     EMERGENCY = "emergency"
 
-
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-TMP_DIR = os.path.join(SCRIPT_DIR, "tmp")
-DB_PATH = os.path.join(TMP_DIR, "adblock_cache.db")
-HOSTS_HASH_PATH = os.path.join(TMP_DIR, "hosts_hash.txt")
-TRIE_CACHE_PATH = os.path.join(TMP_DIR, "trie_cache.pkl")
-REACHABLE_FILE = os.path.join(TMP_DIR, "reachable.txt")
-UNREACHABLE_FILE = os.path.join(TMP_DIR, "unreachable.txt")
 
 CONFIG = {}
 DNS_CACHE = {}
@@ -164,13 +169,6 @@ DEFAULT_CONFIG = {
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logger = logging.getLogger(__name__)
-
-DOMAIN_PATTERN = re.compile(
-    r"^(?:0\.0\.0\.0|127\.0\.0\.1|::1|[0-9a-fA-F:]+)\s+(\S+)|^\s*(\S+)|^\|\|([^\^]+)\^$"
-)
-DOMAIN_VALIDATOR = re.compile(
-    r"^(?!-|\.)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
-)
 
 
 class HybridStorage:
@@ -1447,7 +1445,11 @@ def get_system_resources() -> tuple[int, int, int]:
             max_jobs = 1
             batch_size = 5
             max_concurrent_dns = 5
-            log_once(logging.WARNING, "Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5", console=True)
+            log_once(
+                logging.WARNING,
+                "Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5",
+                console=True,
+            )
         elif global_mode == SystemMode.LOW_MEMORY:
             max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 4)
             batch_size = max(5, min(20, int(free_memory / (1000 * 1024))))
@@ -2330,7 +2332,9 @@ Empfehlungen:
     except Exception as e:
         logger.error(f"Kritischer Fehler in der Hauptfunktion: {e}")
         if global_mode != SystemMode.EMERGENCY:
-            send_email("Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}")
+            send_email(
+                "Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}"
+            )
         sys.exit(1)
     finally:
         if cache_flush_task:
