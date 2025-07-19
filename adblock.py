@@ -9,7 +9,6 @@ import psutil
 import time
 import subprocess
 import hashlib
-import requests
 import re
 import json
 from collections import defaultdict, deque
@@ -31,7 +30,6 @@ import zlib
 import backoff
 from urllib.parse import quote
 import aiofiles
-from logging import FileHandler
 from enum import Enum
 import idna
 from pybloom_live import ScalableBloomFilter
@@ -135,7 +133,6 @@ DEFAULT_CONFIG = {
     "smtp_server": "smtp.example.com",
     "smtp_port": 587,
     "smtp_user": "",
-    "smtp_password": "",
     "remove_redundant_subdomains": True,
     "export_prometheus": False,
     "category_weights": {
@@ -667,14 +664,14 @@ def load_config():
         if not isinstance(CONFIG['category_weights'], dict):
             logger.warning("Ungültige category_weights, verwende Standard")
             CONFIG['category_weights'] = DEFAULT_CONFIG['category_weights']
-        CONFIG['smtp_password'] = os.environ.get('SMTP_PASSWORD', CONFIG.get('smtp_password', ''))
         if CONFIG['send_email'] and CONFIG['use_smtp']:
-            if not all([CONFIG.get(k) for k in ['smtp_server', 'smtp_port', 'smtp_user', 'smtp_password', 'email_recipient', 'email_sender']]):
+            required = ['smtp_server', 'smtp_port', 'smtp_user', 'email_recipient', 'email_sender']
+            if not all([CONFIG.get(k) for k in required]) or not os.environ.get('SMTP_PASSWORD'):
                 logger.warning("Ungültige SMTP-Konfiguration, deaktiviere E-Mail-Benachrichtigungen")
                 CONFIG['send_email'] = False
         try:
             with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump({k: v for k, v in CONFIG.items() if k != 'smtp_password'}, f, indent=4)
+                json.dump(CONFIG, f, indent=4)
             logger.debug(f"Konfigurationsdatei aktualisiert: {config_path}")
         except Exception as e:
             logger.error(f"Fehler beim Speichern der Konfigurationsdatei: {e}")
@@ -764,7 +761,8 @@ def send_email(subject: str, body: str):
         if CONFIG['use_smtp']:
             with smtplib.SMTP(CONFIG['smtp_server'], CONFIG['smtp_port']) as server:
                 server.starttls()
-                server.login(CONFIG['smtp_user'], CONFIG['smtp_password'])
+                password = os.environ.get('SMTP_PASSWORD', '')
+                server.login(CONFIG['smtp_user'], password)
                 server.send_message(msg)
             logger.info("E-Mail-Benachrichtigung über SMTP gesendet")
         else:
@@ -1129,7 +1127,7 @@ def get_system_resources() -> tuple[int, int, int]:
             max_jobs = 1
             batch_size = 5
             max_concurrent_dns = 5
-            log_once(logging.WARNING, f"Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5", console=True)
+            log_once(logging.WARNING, "Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5", console=True)
         elif global_mode == SystemMode.LOW_MEMORY:
             max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 4)
             batch_size = max(5, min(20, int(free_memory / (1000 * 1024))))
