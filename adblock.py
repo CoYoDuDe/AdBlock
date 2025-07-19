@@ -47,6 +47,14 @@ from config import (
     UNREACHABLE_FILE,
 )
 
+from config import (
+    DEFAULT_CONFIG,
+    DOMAIN_PATTERN,
+    DOMAIN_VALIDATOR,
+    LOG_FORMAT,
+    MAX_DNS_CACHE_SIZE,
+)
+
 
 class SystemMode(Enum):
     NORMAL = "normal"
