@@ -1,6 +1,9 @@
 *
 !.gitignore
 !adblock.py
+!filter_engine.py
+!source_loader.py
+!writer.py
 !README.md
 !AGENTS.md
 !hosts.txt
