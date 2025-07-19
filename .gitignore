@@ -4,3 +4,7 @@
 !README.md
 !AGENTS.md
 !hosts.txt
+!.flake8
+!source_loader.py
+!filter_engine.py
+!writer.py
