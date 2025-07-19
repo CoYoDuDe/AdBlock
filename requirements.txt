@@ -4,5 +4,5 @@ aiohttp
 aiodns
 backoff
 aiofiles
-pybloom-live
+pybloom_live
 idna
