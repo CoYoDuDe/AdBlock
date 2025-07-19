@@ -34,6 +34,8 @@ from enum import Enum
 import idna
 from pybloom_live import ScalableBloomFilter
 
+from config import MAX_DNS_CACHE_SIZE
+
 
 class SystemMode(Enum):
     NORMAL = "normal"
@@ -1447,7 +1449,11 @@ def get_system_resources() -> tuple[int, int, int]:
             max_jobs = 1
             batch_size = 5
             max_concurrent_dns = 5
-            log_once(logging.WARNING, "Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5", console=True)
+            log_once(
+                logging.WARNING,
+                "Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5",
+                console=True,
+            )
         elif global_mode == SystemMode.LOW_MEMORY:
             max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 4)
             batch_size = max(5, min(20, int(free_memory / (1000 * 1024))))
@@ -2330,7 +2336,9 @@ Empfehlungen:
     except Exception as e:
         logger.error(f"Kritischer Fehler in der Hauptfunktion: {e}")
         if global_mode != SystemMode.EMERGENCY:
-            send_email("Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}")
+            send_email(
+                "Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}"
+            )
         sys.exit(1)
     finally:
         if cache_flush_task:
