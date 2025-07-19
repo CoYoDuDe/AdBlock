@@ -9,7 +9,6 @@ import psutil
 import time
 import subprocess
 import hashlib
-import re
 import json
 from collections import defaultdict, deque
 import asyncio
@@ -32,23 +31,34 @@ from urllib.parse import quote
 import aiofiles
 from enum import Enum
 from pybloom_live import ScalableBloomFilter
-from filter_engine import parse_domains, ist_gueltige_domain, categorize_list
-from config import MAX_DNS_CACHE_SIZE
+from config import (
+    DB_PATH,
+    DEFAULT_CONFIG,
+    DOMAIN_PATTERN,
+    DOMAIN_VALIDATOR,
+    HOSTS_HASH_PATH,
+    LOG_FORMAT,
+    MAX_DNS_CACHE_SIZE,
+    REACHABLE_FILE,
+    SCRIPT_DIR,
+    TMP_DIR,
+    TRIE_CACHE_PATH,
+    UNREACHABLE_FILE,
+)
 
+from config import (
+    DEFAULT_CONFIG,
+    DOMAIN_PATTERN,
+    DOMAIN_VALIDATOR,
+    LOG_FORMAT,
+    MAX_DNS_CACHE_SIZE,
+)
 
 class SystemMode(Enum):
     NORMAL = "normal"
     LOW_MEMORY = "low_memory"
     EMERGENCY = "emergency"
 
-
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-TMP_DIR = os.path.join(SCRIPT_DIR, "tmp")
-DB_PATH = os.path.join(TMP_DIR, "adblock_cache.db")
-HOSTS_HASH_PATH = os.path.join(TMP_DIR, "hosts_hash.txt")
-TRIE_CACHE_PATH = os.path.join(TMP_DIR, "trie_cache.pkl")
-REACHABLE_FILE = os.path.join(TMP_DIR, "reachable.txt")
-UNREACHABLE_FILE = os.path.join(TMP_DIR, "unreachable.txt")
 
 CONFIG = {}
 DNS_CACHE = {}
@@ -102,7 +112,7 @@ STATISTICS = {
 
 
 DEFAULT_CONFIG = {
-    "log_file": "/var/log/adblock.log",
+    "log_file": "./logs/adblock.log",
     "log_format": "text",
     "max_retries": 3,
     "retry_delay": 2,
@@ -165,13 +175,6 @@ DEFAULT_CONFIG = {
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logger = logging.getLogger(__name__)
-
-DOMAIN_PATTERN = re.compile(
-    r"^(?:0\.0\.0\.0|127\.0\.0\.1|::1|[0-9a-fA-F:]+)\s+(\S+)|^\s*(\S+)|^\|\|([^\^]+)\^$"
-)
-DOMAIN_VALIDATOR = re.compile(
-    r"^(?!-|\.)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
-)
 
 
 class HybridStorage:
