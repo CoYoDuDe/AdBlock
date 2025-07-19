@@ -21,7 +21,7 @@ from email.mime.text import MIMEText
 import sqlite3
 import socket
 import shelve
-from typing import Dict, List, Optional, Iterator, Any
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import csv
 import pickle
@@ -30,7 +30,6 @@ import backoff
 from urllib.parse import quote
 import aiofiles
 from enum import Enum
-import idna
 from pybloom_live import ScalableBloomFilter
 from config import (
     DB_PATH,
@@ -54,7 +53,6 @@ from config import (
     LOG_FORMAT,
     MAX_DNS_CACHE_SIZE,
 )
-
 
 class SystemMode(Enum):
     NORMAL = "normal"
@@ -1159,70 +1157,6 @@ def load_hosts_sources() -> List[str]:
     except Exception as e:
         logger.error(f"Fehler beim Laden der Quell-URLs: {e}")
         return []
-
-
-def parse_domains(content: str, url: str) -> Iterator[str]:
-    try:
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith(("#", "!")):
-                logger.debug(
-                    f"Überspringe Kommentar oder leere Zeile von {url}: {line}"
-                )
-                continue
-            match = DOMAIN_PATTERN.match(line)
-            if match:
-                domain = (match.group(1) or match.group(2) or match.group(3)).lower()
-                logger.debug(f"Geparsed Domain von {url}: {domain}")
-                if ist_gueltige_domain(domain) and not domain.startswith("*"):
-                    STATISTICS["domain_sources"][domain] = url
-                    logger.debug(f"Valide Domain von {url}: {domain}")
-                    yield domain
-                else:
-                    logger.debug(
-                        f"Domain ungültig oder mit * beginnend von {url}: {domain}"
-                    )
-            else:
-                logger.debug(f"Keine Domain in Zeile von {url}: {line}")
-    except Exception as e:
-        logger.error(f"Fehler beim Parsen der Domains aus {url}: {e}")
-
-
-def ist_gueltige_domain(domain: str) -> bool:
-    try:
-        try:
-            domain = idna.encode(domain).decode("ascii")
-            logger.debug(f"Domain {domain} nach IDN-Konvertierung")
-        except idna.core.IDNAError as e:
-            logger.debug(f"Ungültige IDN-Domain {domain}: {e}")
-            return False
-        match = DOMAIN_VALIDATOR.match(domain)
-        if match:
-            logger.debug(f"Domain {domain} ist gültig")
-            return True
-        else:
-            logger.debug(
-                f"Domain {domain} ist ungültig (kein Match mit DOMAIN_VALIDATOR)"
-            )
-            return False
-    except Exception as e:
-        logger.error(f"Fehler beim Validieren der Domain {domain}: {e}")
-        return False
-
-
-def categorize_list(url: str) -> str:
-    try:
-        url_lower = url.lower()
-        if "malware" in url_lower or "phishing" in url_lower or "crypto" in url_lower:
-            return "malware"
-        elif "ads" in url_lower or "ad" in url_lower or "tracking" in url_lower:
-            return "ads"
-        elif "porn" in url_lower or "adult" in url_lower:
-            return "adult"
-        return "unknown"
-    except Exception as e:
-        logger.error(f"Fehler beim Kategorisieren der URL {url}: {e}")
-        return "unknown"
 
 
 async def select_best_dns_server(
