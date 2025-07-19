@@ -9,7 +9,6 @@ import psutil
 import time
 import subprocess
 import hashlib
-import re
 import json
 from collections import defaultdict, deque
 import asyncio
@@ -33,6 +32,14 @@ import aiofiles
 from enum import Enum
 import idna
 from pybloom_live import ScalableBloomFilter
+
+from config import (
+    DEFAULT_CONFIG,
+    DOMAIN_PATTERN,
+    DOMAIN_VALIDATOR,
+    LOG_FORMAT,
+    MAX_DNS_CACHE_SIZE,
+)
 
 
 class SystemMode(Enum):
@@ -100,77 +107,7 @@ STATISTICS = {
 }
 
 
-DEFAULT_CONFIG = {
-    "log_file": "/var/log/adblock.log",
-    "log_format": "text",
-    "max_retries": 3,
-    "retry_delay": 2,
-    "dns_retry_strategy": "exponential",
-    "dns_config_file": "dnsmasq.conf",
-    "hosts_file": "hosts.txt",
-    "hosts_ip": "0.0.0.0",
-    "web_server_ipv4": "127.0.0.1",
-    "web_server_ipv6": "::1",
-    "use_ipv4_output": True,
-    "use_ipv6_output": False,
-    "github_upload": False,
-    "github_repo": "git@github.com:example/repo.git",
-    "github_branch": "main",
-    "git_user": "",
-    "git_email": "",
-    "dns_servers": [
-        "8.8.8.8",
-        "8.8.4.4",
-        "1.1.1.1",
-        "1.0.0.1",
-        "2001:4860:4860::8888",
-        "2001:4860:4860::8844",
-        "2606:4700:4700::1111",
-        "2606:4700:4700::1001",
-    ],
-    "logging_level": "INFO",
-    "detailed_log": False,
-    "save_unreachable": True,
-    "prioritize_lists": True,
-    "domain_timeout": 3,
-    "domain_cache_validity_days": 7,
-    "cache_flush_interval": 300,
-    "cache_trie": True,
-    "always_check_all_domains": False,
-    "priority_lists": [],
-    "send_email": False,
-    "use_smtp": True,
-    "email_recipient": "example@example.com",
-    "email_sender": "no-reply@example.com",
-    "smtp_server": "smtp.example.com",
-    "smtp_port": 587,
-    "smtp_user": "",
-    "remove_redundant_subdomains": True,
-    "export_prometheus": False,
-    "category_weights": {"malware": 1.5, "adult": 1.2, "ads": 1.0, "unknown": 0.8},
-    "use_bloom_filter": True,
-    "bloom_filter_capacity": 10000000,
-    "bloom_filter_error_rate": 0.001,
-    "http_timeout": 60,
-    "resource_thresholds": {
-        "low_memory_mb": 150,
-        "emergency_memory_mb": 50,
-        "high_cpu_percent": 90,
-        "high_latency_s": 5.0,
-        "moving_average_window": 5,
-        "consecutive_violations": 2,
-    },
-}
-
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logger = logging.getLogger(__name__)
-
-DOMAIN_PATTERN = re.compile(
-    r"^(?:0\.0\.0\.0|127\.0\.0\.1|::1|[0-9a-fA-F:]+)\s+(\S+)|^\s*(\S+)|^\|\|([^\^]+)\^$"
-)
-DOMAIN_VALIDATOR = re.compile(
-    r"^(?!-|\.)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
-)
 
 
 class HybridStorage:
@@ -1447,7 +1384,11 @@ def get_system_resources() -> tuple[int, int, int]:
             max_jobs = 1
             batch_size = 5
             max_concurrent_dns = 5
-            log_once(logging.WARNING, "Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5", console=True)
+            log_once(
+                logging.WARNING,
+                "Emergency-Mode: Batch-Größe=5, Jobs=1, DNS-Anfragen=5",
+                console=True,
+            )
         elif global_mode == SystemMode.LOW_MEMORY:
             max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 4)
             batch_size = max(5, min(20, int(free_memory / (1000 * 1024))))
@@ -2330,7 +2271,9 @@ Empfehlungen:
     except Exception as e:
         logger.error(f"Kritischer Fehler in der Hauptfunktion: {e}")
         if global_mode != SystemMode.EMERGENCY:
-            send_email("Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}")
+            send_email(
+                "Kritischer Fehler im AdBlock-Skript", f"Skript fehlgeschlagen: {e}"
+            )
         sys.exit(1)
     finally:
         if cache_flush_task:
