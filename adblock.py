@@ -34,8 +34,6 @@ from pybloom_live import ScalableBloomFilter
 from config import (
     DB_PATH,
     DEFAULT_CONFIG,
-    DOMAIN_PATTERN,
-    DOMAIN_VALIDATOR,
     HOSTS_HASH_PATH,
     LOG_FORMAT,
     MAX_DNS_CACHE_SIZE,
@@ -45,14 +43,9 @@ from config import (
     TRIE_CACHE_PATH,
     UNREACHABLE_FILE,
 )
+from filter_engine import categorize_list, parse_domains
+from source_loader import load_hosts_sources, load_whitelist_blacklist
 
-from config import (
-    DEFAULT_CONFIG,
-    DOMAIN_PATTERN,
-    DOMAIN_VALIDATOR,
-    LOG_FORMAT,
-    MAX_DNS_CACHE_SIZE,
-)
 
 class SystemMode(Enum):
     NORMAL = "normal"
@@ -111,69 +104,12 @@ STATISTICS = {
 }
 
 
-DEFAULT_CONFIG = {
-    "log_file": "./logs/adblock.log",
-    "log_format": "text",
-    "max_retries": 3,
-    "retry_delay": 2,
-    "dns_retry_strategy": "exponential",
-    "dns_config_file": "dnsmasq.conf",
-    "hosts_file": "hosts.txt",
-    "hosts_ip": "0.0.0.0",
-    "web_server_ipv4": "127.0.0.1",
-    "web_server_ipv6": "::1",
-    "use_ipv4_output": True,
-    "use_ipv6_output": False,
-    "github_upload": False,
-    "github_repo": "git@github.com:example/repo.git",
-    "github_branch": "main",
-    "git_user": "",
-    "git_email": "",
-    "dns_servers": [
-        "8.8.8.8",
-        "8.8.4.4",
-        "1.1.1.1",
-        "1.0.0.1",
-        "2001:4860:4860::8888",
-        "2001:4860:4860::8844",
-        "2606:4700:4700::1111",
-        "2606:4700:4700::1001",
-    ],
-    "logging_level": "INFO",
-    "detailed_log": False,
-    "save_unreachable": True,
-    "prioritize_lists": True,
-    "domain_timeout": 3,
-    "domain_cache_validity_days": 7,
-    "cache_flush_interval": 300,
-    "cache_trie": True,
-    "always_check_all_domains": False,
-    "priority_lists": [],
-    "send_email": False,
-    "use_smtp": True,
-    "email_recipient": "example@example.com",
-    "email_sender": "no-reply@example.com",
-    "smtp_server": "smtp.example.com",
-    "smtp_port": 587,
-    "smtp_user": "",
-    "remove_redundant_subdomains": True,
-    "export_prometheus": False,
-    "category_weights": {"malware": 1.5, "adult": 1.2, "ads": 1.0, "unknown": 0.8},
-    "use_bloom_filter": True,
-    "bloom_filter_capacity": 10000000,
-    "bloom_filter_error_rate": 0.001,
-    "http_timeout": 60,
-    "resource_thresholds": {
-        "low_memory_mb": 150,
-        "emergency_memory_mb": 50,
-        "high_cpu_percent": 90,
-        "high_latency_s": 5.0,
-        "moving_average_window": 5,
-        "consecutive_violations": 2,
-    },
-}
+# Die Standardkonfiguration und das Log-Format werden zentral in config.py
+# verwaltet. Die hier zuvor vorhandenen Duplikate führten zu Ruff-Fehlern
+# (F811). Durch das Importieren der Werte vermeiden wir abweichende Angaben
+# zwischen den Modulen und stellen sicher, dass Konfigurationsänderungen nur an
+# einer Stelle erfolgen müssen.
 
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logger = logging.getLogger(__name__)
 
 
@@ -1101,62 +1037,9 @@ def initialize_directories_and_files():
         raise
 
 
-def load_whitelist_blacklist() -> tuple[set[str], set[str]]:
-    try:
-        whitelist = set()
-        blacklist = set()
-        for file, target in [
-            ("whitelist.txt", whitelist),
-            ("blacklist.txt", blacklist),
-        ]:
-            filepath = os.path.join(SCRIPT_DIR, file)
-            if os.path.exists(filepath):
-                with open(filepath, "r", encoding="utf-8") as f:
-                    for line in f:
-                        domain = line.strip().lower()
-                        if (
-                            domain
-                            and not domain.startswith("#")
-                            and ist_gueltige_domain(domain)
-                        ):
-                            target.add(domain)
-        logger.debug(
-            f"Whitelist: {len(whitelist)} Einträge, Blacklist: {len(blacklist)} Einträge"
-        )
-        return whitelist, blacklist
-    except Exception as e:
-        logger.error(f"Fehler beim Laden von Whitelist/Blacklist: {e}")
-        return set(), set()
-
-
-def load_hosts_sources() -> List[str]:
-    sources_path = os.path.join(SCRIPT_DIR, "hosts_sources.conf")
-    try:
-        if not os.path.exists(sources_path):
-            logger.warning(
-                f"Quell-URLs-Datei {sources_path} nicht gefunden, erstelle Standarddatei"
-            )
-            with open(sources_path, "w", encoding="utf-8") as f:
-                f.write(
-                    "\n".join(
-                        [
-                            "https://adaway.org/hosts.txt",
-                            "https://v.firebog.net/hosts/Easyprivacy.txt",
-                        ]
-                    )
-                )
-        with open(sources_path, "r", encoding="utf-8") as f:
-            sources = [
-                line.strip() for line in f if line.strip() and not line.startswith("#")
-            ]
-        priority = CONFIG["priority_lists"]
-        if CONFIG["prioritize_lists"]:
-            sources = sorted(sources, key=lambda x: 0 if x in priority else 1)
-        logger.debug(f"Geladene Quell-URLs: {len(sources)}")
-        return sources
-    except Exception as e:
-        logger.error(f"Fehler beim Laden der Quell-URLs: {e}")
-        return []
+# Die Funktionen zum Laden der Quelllisten sowie von White- und Blacklist sind
+# bereits im Modul ``source_loader`` implementiert und werden hier nur noch
+# importiert. Dadurch vermeiden wir doppelte Logik innerhalb des Projekts.
 
 
 async def select_best_dns_server(
@@ -2002,7 +1885,7 @@ async def main():
             logger.debug("Git-Upload deaktiviert")
 
         logger.debug("Lade Quell-URLs...")
-        sources = load_hosts_sources()
+        sources = load_hosts_sources(CONFIG, SCRIPT_DIR, logger)
         if not sources:
             logger.error("Keine Quell-URLs in hosts_sources.conf gefunden")
             if global_mode != SystemMode.EMERGENCY:
@@ -2014,7 +1897,7 @@ async def main():
         logger.debug(f"Geladene Quell-URLs: {len(sources)}")
 
         logger.debug("Lade Whitelist und Blacklist...")
-        whitelist, blacklist = load_whitelist_blacklist()
+        whitelist, blacklist = load_whitelist_blacklist(SCRIPT_DIR, logger)
         logger.debug(
             f"Whitelist: {len(whitelist)} Einträge, Blacklist: {len(blacklist)} Einträge"
         )
