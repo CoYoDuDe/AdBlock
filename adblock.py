@@ -807,12 +807,23 @@ def setup_logging():
             )
 
         log_dir = os.path.dirname(CONFIG["log_file"])
-        if log_dir and not os.access(log_dir, os.W_OK):
-            logger.error(
-                f"Keine Schreibrechte für Log-Verzeichnis {log_dir}, beende Skript"
-            )
-            print(f"Keine Schreibrechte für Log-Verzeichnis {log_dir}, beende Skript")
-            sys.exit(1)
+        if log_dir:
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+            except OSError as e:
+                logger.error(
+                    f"Fehler beim Erstellen des Log-Verzeichnisses {log_dir}: {e}"
+                )
+                print(f"Fehler beim Erstellen des Log-Verzeichnisses {log_dir}: {e}")
+                sys.exit(1)
+            if not os.access(log_dir, os.W_OK):
+                logger.error(
+                    f"Keine Schreibrechte für Log-Verzeichnis {log_dir}, beende Skript"
+                )
+                print(
+                    f"Keine Schreibrechte für Log-Verzeichnis {log_dir}, beende Skript"
+                )
+                sys.exit(1)
 
         level = getattr(
             logging, CONFIG.get("logging_level", "INFO").upper(), logging.INFO
