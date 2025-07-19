@@ -23,11 +23,10 @@ import socket
 import shelve
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
-import csv
 import pickle
 import zlib
 import backoff
-from urllib.parse import quote
+from writer import safe_save, export_statistics_csv, export_prometheus_metrics
 import aiofiles
 from enum import Enum
 from pybloom_live import ScalableBloomFilter
@@ -859,26 +858,6 @@ def calculate_md5(content: str) -> str:
         return ""
 
 
-def safe_save(filepath: str, content, is_json: bool = False):
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            if is_json:
-                json.dump(content, f, indent=4, ensure_ascii=False)
-            else:
-                f.write(content)
-        logger.info(f"Datei gespeichert: {filepath}")
-    except Exception as e:
-        logger.error(f"Fehler beim Speichern von {filepath}: {e}")
-
-
-def append_to_file(filepath: str, content: str):
-    try:
-        with open(filepath, "a", encoding="utf-8") as f:
-            f.write(content + "\n")
-    except Exception as e:
-        logger.error(f"Fehler beim Anhängen an {filepath}: {e}")
-
-
 def send_email(subject: str, body: str):
     if not CONFIG.get("send_email", False) or global_mode == SystemMode.EMERGENCY:
         return
@@ -926,87 +905,6 @@ async def is_ipv6_supported() -> bool:
         return False
 
 
-def export_statistics_csv():
-    csv_path = os.path.join(TMP_DIR, "statistics.csv")
-    try:
-        with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(
-                [
-                    "URL",
-                    "Category",
-                    "Total",
-                    "Unique",
-                    "Reachable",
-                    "Unreachable",
-                    "Duplicates",
-                    "Subdomains",
-                    "Score",
-                ]
-            )
-            for url, stats in STATISTICS["list_stats"].items():
-                writer.writerow(
-                    [
-                        url,
-                        stats["category"],
-                        stats["total"],
-                        stats["unique"],
-                        stats["reachable"],
-                        stats["unreachable"],
-                        stats["duplicates"],
-                        stats["subdomains"],
-                        stats["score"],
-                    ]
-                )
-        logger.info(f"Statistiken als CSV gespeichert: {csv_path}")
-    except Exception as e:
-        logger.error(f"Fehler beim Exportieren der CSV: {e}")
-
-
-def export_prometheus_metrics(start_time: float):
-    if not CONFIG["export_prometheus"] or global_mode == SystemMode.EMERGENCY:
-        return
-    metrics_path = os.path.join(TMP_DIR, "metrics.prom")
-    try:
-        with open(metrics_path, "w", encoding="utf-8") as f:
-            f.write("# AdBlock Skript Metriken\n")
-            f.write(f'adblock_total_domains {STATISTICS["total_domains"]}\n')
-            f.write(f'adblock_unique_domains {STATISTICS["unique_domains"]}\n')
-            f.write(f'adblock_reachable_domains {STATISTICS["reachable_domains"]}\n')
-            f.write(
-                f'adblock_unreachable_domains {STATISTICS["unreachable_domains"]}\n'
-            )
-            f.write(f'adblock_duplicates {STATISTICS["duplicates"]}\n')
-            f.write(f'adblock_cache_hits {STATISTICS["cache_hits"]}\n')
-            f.write(f'adblock_cache_flushes {STATISTICS["cache_flushes"]}\n')
-            f.write(f'adblock_trie_cache_hits {STATISTICS["trie_cache_hits"]}\n')
-            f.write(
-                f"adblock_cache_size {len(cache_manager.domain_cache.ram_storage)}\n"
-            )
-            f.write(f'adblock_failed_lists {STATISTICS["failed_lists"]}\n')
-            f.write(f"adblock_runtime_seconds {time.time() - start_time}\n")
-            for url, stats in STATISTICS["list_stats"].items():
-                safe_url = quote(url, safe="")
-                f.write(f'adblock_list_total{{url="{safe_url}"}} {stats["total"]}\n')
-                f.write(f'adblock_list_unique{{url="{safe_url}"}} {stats["unique"]}\n')
-                f.write(
-                    f'adblock_list_reachable{{url="{safe_url}"}} {stats["reachable"]}\n'
-                )
-                f.write(
-                    f'adblock_list_unreachable{{url="{safe_url}"}} {stats["unreachable"]}\n'
-                )
-                f.write(
-                    f'adblock_list_duplicates{{url="{safe_url}"}} {stats["duplicates"]}\n'
-                )
-                f.write(
-                    f'adblock_list_subdomains{{url="{safe_url}"}} {stats["subdomains"]}\n'
-                )
-                f.write(f'adblock_list_score{{url="{safe_url}"}} {stats["score"]}\n')
-        logger.info(f"Prometheus-Metriken gespeichert: {metrics_path}")
-    except Exception as e:
-        logger.error(f"Fehler beim Exportieren der Prometheus-Metriken: {e}")
-
-
 def initialize_directories_and_files():
     try:
         os.makedirs(TMP_DIR, exist_ok=True)
@@ -1029,7 +927,7 @@ def initialize_directories_and_files():
         for path, content, is_json in files:
             filepath = os.path.join(SCRIPT_DIR, path)
             if not os.path.exists(filepath):
-                safe_save(filepath, content, is_json)
+                safe_save(filepath, content, logger, is_json=is_json)
                 logger.info(f"Erstellt: {filepath}")
         logger.debug("Verzeichnisse und Dateien initialisiert")
     except Exception as e:
@@ -2105,10 +2003,22 @@ async def main():
                 await f.write("\n".join(unreachable_domains))
         if CONFIG["github_upload"] and global_mode != SystemMode.EMERGENCY:
             upload_to_github()
-        safe_save(os.path.join(TMP_DIR, "statistics.json"), STATISTICS, is_json=True)
+        safe_save(
+            os.path.join(TMP_DIR, "statistics.json"),
+            STATISTICS,
+            logger,
+            is_json=True,
+        )
         if global_mode != SystemMode.EMERGENCY:
-            export_statistics_csv()
-            export_prometheus_metrics(start_time)
+            export_statistics_csv(TMP_DIR, STATISTICS, logger)
+            if CONFIG["export_prometheus"]:
+                export_prometheus_metrics(
+                    TMP_DIR,
+                    STATISTICS,
+                    start_time,
+                    len(cache_manager.domain_cache.ram_storage),
+                    logger,
+                )
         recommendations = (
             "\n".join(STATISTICS["list_recommendations"])
             if STATISTICS["list_recommendations"]
