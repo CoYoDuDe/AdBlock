@@ -53,7 +53,6 @@ CONFIG = {}
 DNS_CACHE = {}
 dns_cache_lock = Lock()
 cache_flush_lock = asyncio.Lock()
-MAX_DNS_CACHE_SIZE = 10000
 cache_manager = None
 global_mode = SystemMode.NORMAL
 
@@ -99,6 +98,7 @@ STATISTICS = {
     "run_failed": False,
     "domain_sources": {},
 }
+
 
 DEFAULT_CONFIG = {
     "log_file": "/var/log/adblock.log",
