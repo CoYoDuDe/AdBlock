@@ -1,17 +1,10 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Dict, Iterator
 
 import idna
-
-DOMAIN_PATTERN = re.compile(
-    r"^(?:0\.0\.0\.0|127\.0\.0\.1|::1|[0-9a-fA-F:]+)\s+(\S+)|^\s*(\S+)|^\|\|([^\^]+)\^$"
-)
-DOMAIN_VALIDATOR = re.compile(
-    r"^(?!-|\.)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
-)
+from config import DOMAIN_PATTERN, DOMAIN_VALIDATOR
 
 
 LOGGER = logging.getLogger(__name__)

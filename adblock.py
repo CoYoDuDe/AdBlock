@@ -9,7 +9,6 @@ import psutil
 import time
 import subprocess
 import hashlib
-import re
 import json
 from collections import defaultdict, deque
 import asyncio
@@ -22,7 +21,7 @@ from email.mime.text import MIMEText
 import sqlite3
 import socket
 import shelve
-from typing import Dict, List, Optional, Iterator, Any
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import csv
 import pickle
@@ -31,25 +30,35 @@ import backoff
 from urllib.parse import quote
 import aiofiles
 from enum import Enum
-import idna
 from pybloom_live import ScalableBloomFilter
+from config import (
+    DB_PATH,
+    DEFAULT_CONFIG,
+    DOMAIN_PATTERN,
+    DOMAIN_VALIDATOR,
+    HOSTS_HASH_PATH,
+    LOG_FORMAT,
+    MAX_DNS_CACHE_SIZE,
+    REACHABLE_FILE,
+    SCRIPT_DIR,
+    TMP_DIR,
+    TRIE_CACHE_PATH,
+    UNREACHABLE_FILE,
+)
 
-from config import MAX_DNS_CACHE_SIZE
-
+from config import (
+    DEFAULT_CONFIG,
+    DOMAIN_PATTERN,
+    DOMAIN_VALIDATOR,
+    LOG_FORMAT,
+    MAX_DNS_CACHE_SIZE,
+)
 
 class SystemMode(Enum):
     NORMAL = "normal"
     LOW_MEMORY = "low_memory"
     EMERGENCY = "emergency"
 
-
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-TMP_DIR = os.path.join(SCRIPT_DIR, "tmp")
-DB_PATH = os.path.join(TMP_DIR, "adblock_cache.db")
-HOSTS_HASH_PATH = os.path.join(TMP_DIR, "hosts_hash.txt")
-TRIE_CACHE_PATH = os.path.join(TMP_DIR, "trie_cache.pkl")
-REACHABLE_FILE = os.path.join(TMP_DIR, "reachable.txt")
-UNREACHABLE_FILE = os.path.join(TMP_DIR, "unreachable.txt")
 
 CONFIG = {}
 DNS_CACHE = {}
@@ -103,7 +112,7 @@ STATISTICS = {
 
 
 DEFAULT_CONFIG = {
-    "log_file": "/var/log/adblock.log",
+    "log_file": "./logs/adblock.log",
     "log_format": "text",
     "max_retries": 3,
     "retry_delay": 2,
@@ -166,13 +175,6 @@ DEFAULT_CONFIG = {
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 logger = logging.getLogger(__name__)
-
-DOMAIN_PATTERN = re.compile(
-    r"^(?:0\.0\.0\.0|127\.0\.0\.1|::1|[0-9a-fA-F:]+)\s+(\S+)|^\s*(\S+)|^\|\|([^\^]+)\^$"
-)
-DOMAIN_VALIDATOR = re.compile(
-    r"^(?!-|\.)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
-)
 
 
 class HybridStorage:
@@ -1155,70 +1157,6 @@ def load_hosts_sources() -> List[str]:
     except Exception as e:
         logger.error(f"Fehler beim Laden der Quell-URLs: {e}")
         return []
-
-
-def parse_domains(content: str, url: str) -> Iterator[str]:
-    try:
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith(("#", "!")):
-                logger.debug(
-                    f"Überspringe Kommentar oder leere Zeile von {url}: {line}"
-                )
-                continue
-            match = DOMAIN_PATTERN.match(line)
-            if match:
-                domain = (match.group(1) or match.group(2) or match.group(3)).lower()
-                logger.debug(f"Geparsed Domain von {url}: {domain}")
-                if ist_gueltige_domain(domain) and not domain.startswith("*"):
-                    STATISTICS["domain_sources"][domain] = url
-                    logger.debug(f"Valide Domain von {url}: {domain}")
-                    yield domain
-                else:
-                    logger.debug(
-                        f"Domain ungültig oder mit * beginnend von {url}: {domain}"
-                    )
-            else:
-                logger.debug(f"Keine Domain in Zeile von {url}: {line}")
-    except Exception as e:
-        logger.error(f"Fehler beim Parsen der Domains aus {url}: {e}")
-
-
-def ist_gueltige_domain(domain: str) -> bool:
-    try:
-        try:
-            domain = idna.encode(domain).decode("ascii")
-            logger.debug(f"Domain {domain} nach IDN-Konvertierung")
-        except idna.core.IDNAError as e:
-            logger.debug(f"Ungültige IDN-Domain {domain}: {e}")
-            return False
-        match = DOMAIN_VALIDATOR.match(domain)
-        if match:
-            logger.debug(f"Domain {domain} ist gültig")
-            return True
-        else:
-            logger.debug(
-                f"Domain {domain} ist ungültig (kein Match mit DOMAIN_VALIDATOR)"
-            )
-            return False
-    except Exception as e:
-        logger.error(f"Fehler beim Validieren der Domain {domain}: {e}")
-        return False
-
-
-def categorize_list(url: str) -> str:
-    try:
-        url_lower = url.lower()
-        if "malware" in url_lower or "phishing" in url_lower or "crypto" in url_lower:
-            return "malware"
-        elif "ads" in url_lower or "ad" in url_lower or "tracking" in url_lower:
-            return "ads"
-        elif "porn" in url_lower or "adult" in url_lower:
-            return "adult"
-        return "unknown"
-    except Exception as e:
-        logger.error(f"Fehler beim Kategorisieren der URL {url}: {e}")
-        return "unknown"
 
 
 async def select_best_dns_server(
