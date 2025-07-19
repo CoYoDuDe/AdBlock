@@ -1,0 +1,8 @@
+psutil
+requests
+aiohttp
+aiodns
+backoff
+aiofiles
+pybloom_live
+idna
