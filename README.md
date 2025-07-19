@@ -21,6 +21,12 @@ python adblock.py
 - `requests`, `tqdm`, `re`, `os` (Standard oder per `requirements.txt`)
 - Setze die Umgebungsvariable `SMTP_PASSWORD`, falls SMTP-E-Mails aktiviert sind
 
+## 🛠️ Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## 📄 Ausgabe
 
 Die Datei `hosts.txt` wird automatisch generiert.
