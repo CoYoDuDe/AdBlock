@@ -6,3 +6,4 @@ backoff
 aiofiles
 pybloom_live
 idna
+pytest
