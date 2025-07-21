@@ -9,3 +9,4 @@
 !hosts.txt
 !requirements.txt
 !.flake8
+!hosts_sources.conf
