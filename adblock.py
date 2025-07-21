@@ -693,6 +693,7 @@ def load_config():
             )
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(DEFAULT_CONFIG, f, indent=4)
+                f.write("\n")
         else:
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
@@ -785,6 +786,7 @@ def load_config():
                     f,
                     indent=4,
                 )
+                f.write("\n")
             logger.debug(f"Konfigurationsdatei aktualisiert: {config_path}")
         except Exception as e:
             logger.error(f"Fehler beim Speichern der Konfigurationsdatei: {e}")
