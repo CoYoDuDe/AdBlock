@@ -1646,11 +1646,11 @@ async def process_list(
         )
         return domain_count, unique_count, subdomain_count
     except aiohttp.ClientError as e:
-        logger.error(f"HTTP-Fehler beim Verarbeiten der Liste {url}: {e}")
+        logger.warning(f"Netzwerkfehler beim Verarbeiten der Liste {url}: {e}")
         STATISTICS["failed_lists"] += 1
         return 0, 0, 0
     except asyncio.TimeoutError as e:
-        logger.error(f"Timeout beim Verarbeiten der Liste {url}: {e}")
+        logger.warning(f"Netzwerk-Timeout bei der Liste {url}: {e}")
         STATISTICS["failed_lists"] += 1
         return 0, 0, 0
     except Exception as e:
@@ -1763,6 +1763,10 @@ async def main():
                 tasks = [process_list(url, cache_manager, session) for url in batch]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for url, result in zip(batch, results):
+                    if isinstance(result, (aiohttp.ClientError, asyncio.TimeoutError)):
+                        logger.warning(f"Netzwerkfehler bei {url}: {result}")
+                        STATISTICS["failed_lists"] += 1
+                        continue
                     if isinstance(result, Exception):
                         logger.error(f"Fehler bei {url}: {result}")
                         STATISTICS["failed_lists"] += 1
@@ -1785,12 +1789,12 @@ async def main():
                     logger.debug(f"Speicherverbrauch nach {url}: {memory:.2f} MB")
                     gc.collect()
         if not processed_urls:
-            logger.error("Keine gültigen Domains gefunden")
+            logger.warning("Keine gültigen Domains gefunden")
             if global_mode != SystemMode.EMERGENCY:
                 send_email(
                     "Fehler im AdBlock-Skript", "Keine gültigen Domains gefunden"
                 )
-            raise ValueError("Keine gültigen Domains gefunden")
+            processed_urls = []
         STATISTICS["total_domains"] = sum(
             counts["total"] for counts in url_counts.values()
         )
