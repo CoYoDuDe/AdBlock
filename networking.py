@@ -1,4 +1,5 @@
 """Networking helper functions."""
+
 from __future__ import annotations
 
 import asyncio
@@ -52,7 +53,9 @@ async def is_ipv6_supported(config: dict) -> bool:
         return False
 
 
-async def select_best_dns_server(dns_servers: List[str], timeout: float = 5.0) -> List[str]:
+async def select_best_dns_server(
+    dns_servers: List[str], timeout: float = 5.0
+) -> List[str]:
     async def test_server(server: str) -> Tuple[str, float]:
         try:
             resolver = aiodns.DNSResolver(nameservers=[server], timeout=timeout)
@@ -65,12 +68,20 @@ async def select_best_dns_server(dns_servers: List[str], timeout: float = 5.0) -
 
     tasks = [test_server(server) for server in dns_servers]
     results = await asyncio.gather(*tasks)
-    sorted_servers = [s for s, l in sorted(results, key=lambda x: x[1]) if l != float("inf")]
+    sorted_servers = [
+        server
+        for server, latency in sorted(results, key=lambda x: x[1])
+        if latency != float("inf")
+    ]
     return sorted_servers or dns_servers
 
 
-async def test_dns_entry_async(domain: str, resolver, record_type: str = "A", max_concurrent: int = 5) -> bool:
-    async def query_with_backoff(domain: str, record: str, resolver, attempt: int) -> bool:
+async def test_dns_entry_async(
+    domain: str, resolver, record_type: str = "A", max_concurrent: int = 5
+) -> bool:
+    async def query_with_backoff(
+        domain: str, record: str, resolver, attempt: int
+    ) -> bool:
         try:
             result = await resolver.query(domain, record)
             return bool(result)
@@ -107,9 +118,13 @@ async def test_single_domain_async(
     if domain in cache:
         entry = cache[domain]
         last_checked = datetime.fromisoformat(entry["checked_at"])
-        if datetime.now() - last_checked < timedelta(days=DEFAULT_CONFIG["domain_cache_validity_days"]):
+        if datetime.now() - last_checked < timedelta(
+            days=DEFAULT_CONFIG["domain_cache_validity_days"]
+        ):
             return entry["reachable"]
-    reachable = await test_dns_entry_async(domain, resolver, max_concurrent=max_concurrent)
+    reachable = await test_dns_entry_async(
+        domain, resolver, max_concurrent=max_concurrent
+    )
     cache_manager.save_domain(domain, reachable, url)
     return reachable
 
@@ -124,7 +139,9 @@ async def test_domain_batch(
     max_concurrent: int = 5,
 ):
     tasks = [
-        test_single_domain_async(domain, url, resolver, cache_manager, whitelist, blacklist, max_concurrent)
+        test_single_domain_async(
+            domain, url, resolver, cache_manager, whitelist, blacklist, max_concurrent
+        )
         for domain in domains
     ]
     results = await asyncio.gather(*tasks)
