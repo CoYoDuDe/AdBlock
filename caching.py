@@ -233,6 +233,7 @@ class CacheManager:
     def __init__(self, db_path: str, flush_interval: int):
         self.db_path = db_path
         self.flush_interval = flush_interval
+        os.makedirs(TMP_DIR, exist_ok=True)
         self.domain_cache = HybridStorage(os.path.join(TMP_DIR, "domain_cache.db"))
         self.list_cache: Dict[str, Dict] = {}
         self.last_flush = time.time()
@@ -247,7 +248,8 @@ class CacheManager:
             return 1000
 
     def adjust_cache_size(self) -> None:
-        self.current_cache_size = max(1000, self.calculate_dynamic_cache_size())
+        self.current_cache_size = self.calculate_dynamic_cache_size()
+        self.save_domain_cache()
 
     def init_database(self) -> None:
         try:

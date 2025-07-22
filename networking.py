@@ -69,7 +69,9 @@ async def select_best_dns_server(
     tasks = [test_server(server) for server in dns_servers]
     results = await asyncio.gather(*tasks)
     sorted_servers = [
-        s for s, l in sorted(results, key=lambda x: x[1]) if l != float("inf")
+        server
+        for server, latency in sorted(results, key=lambda x: x[1])
+        if latency != float("inf")
     ]
     return sorted_servers or dns_servers
 
