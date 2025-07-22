@@ -1,3 +1,9 @@
+"""Domain parsing and list evaluation helpers.
+
+This module validates and extracts domains from hosts lists and computes
+metrics used to rank the source lists.
+"""
+
 from __future__ import annotations
 
 import logging

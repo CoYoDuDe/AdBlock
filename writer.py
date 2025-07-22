@@ -1,3 +1,5 @@
+"""Helper routines for safely writing output files and statistics."""
+
 from __future__ import annotations
 
 import csv

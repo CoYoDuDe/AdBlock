@@ -1,3 +1,5 @@
+"""Utilities for loading host source URLs and allow/deny lists."""
+
 from __future__ import annotations
 
 from typing import List, Tuple, Set
