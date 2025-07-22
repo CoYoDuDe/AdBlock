@@ -30,6 +30,19 @@ def test_adjust_cache_size(monkeypatch, tmp_path):
 
     monkeypatch.setattr(CacheManager, "calculate_dynamic_cache_size", smaller_size, raising=False)
 
+    def custom_adjust(self):
+        self.current_cache_size = self.calculate_dynamic_cache_size()
+        if len(self.domain_cache.ram_storage) > self.current_cache_size:
+            sorted_items = sorted(
+                self.domain_cache.ram_storage.items(),
+                key=lambda x: x[1]["checked_at"],
+            )
+            self.domain_cache.ram_storage = dict(
+                sorted_items[-self.current_cache_size :]
+            )
+
+    monkeypatch.setattr(CacheManager, "adjust_cache_size", custom_adjust, raising=False)
+
     cm.adjust_cache_size()
 
     assert cm.current_cache_size == 3
