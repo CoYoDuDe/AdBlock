@@ -27,6 +27,13 @@ python adblock.py
 pip install -r requirements.txt
 ```
 
+## ❓ Troubleshooting
+
+Sollte das Laden der Blocklisten fehlschlagen, prüfe die Internetverbindung
+des Systems. Das Skript speichert eine Fehlermeldung in `statistics.json` unter
+`error_message`. Bei mehrfachen Fehlschlägen kann eine instabile Netzwerk-
+verbindung oder ein falsch konfigurierter Proxy die Ursache sein.
+
 ## 📄 Ausgabe
 
 Die Datei `hosts.txt` wird automatisch generiert.
