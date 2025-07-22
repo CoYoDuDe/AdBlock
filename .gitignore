@@ -4,6 +4,9 @@
 !filter_engine.py
 !source_loader.py
 !writer.py
+!caching.py
+!networking.py
+!monitoring.py
 !README.md
 !AGENTS.md
 !hosts.txt
