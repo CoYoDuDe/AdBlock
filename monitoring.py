@@ -1,4 +1,5 @@
 """System monitoring helpers."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +15,9 @@ logger = logging.getLogger(__name__)
 
 async def check_network_latency(config: dict) -> float:
     try:
-        resolver = aiodns.DNSResolver(nameservers=[config["dns_servers"][0]], timeout=5.0)
+        resolver = aiodns.DNSResolver(
+            nameservers=[config["dns_servers"][0]], timeout=5.0
+        )
         start = asyncio.get_event_loop().time()
         await resolver.query("example.com", "A")
         latency = asyncio.get_event_loop().time() - start
@@ -40,9 +43,15 @@ def get_system_resources() -> Tuple[int, int, int]:
 async def monitor_resources(cache_manager, config: dict) -> None:
     logger.info("Starte Ressourcenüberwachung...")
     history = {
-        "free_memory_mb": deque(maxlen=config["resource_thresholds"]["moving_average_window"]),
-        "cpu_usage_percent": deque(maxlen=config["resource_thresholds"]["moving_average_window"]),
-        "latency_s": deque(maxlen=config["resource_thresholds"]["moving_average_window"]),
+        "free_memory_mb": deque(
+            maxlen=config["resource_thresholds"]["moving_average_window"]
+        ),
+        "cpu_usage_percent": deque(
+            maxlen=config["resource_thresholds"]["moving_average_window"]
+        ),
+        "latency_s": deque(
+            maxlen=config["resource_thresholds"]["moving_average_window"]
+        ),
     }
     while True:
         try:
