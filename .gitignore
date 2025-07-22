@@ -13,3 +13,7 @@
 !requirements.txt
 !.flake8
 !hosts_sources.conf
+__pycache__/
+*.pyc
+tmp/
+*.db
