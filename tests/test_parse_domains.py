@@ -1,4 +1,14 @@
-from filter_engine import parse_domains
+"""Unit tests for domain parsing functions."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# Ensure repository root is on the module search path so local imports work
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from filter_engine import parse_domains  # noqa: E402
 
 
 def test_valid_domain_extraction():
