@@ -26,15 +26,6 @@ def safe_save(
         logger.error("Fehler beim Speichern von %s: %s", filepath, exc)
 
 
-def append_to_file(filepath: str, content: str, logger: logging.Logger) -> None:
-    """Append a line to a file."""
-    try:
-        with open(filepath, "a", encoding="utf-8") as f:
-            f.write(content + "\n")
-    except Exception as exc:
-        logger.error("Fehler beim Anhängen an %s: %s", filepath, exc)
-
-
 def export_statistics_csv(
     tmp_dir: str, statistics: Dict, logger: logging.Logger
 ) -> None:
