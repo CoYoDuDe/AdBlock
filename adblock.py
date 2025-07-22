@@ -525,12 +525,16 @@ async def process_list(
         )
         return domain_count, unique_count, subdomain_count
     except aiohttp.ClientError as e:
-        logger.warning(f"Netzwerkfehler beim Verarbeiten der Liste {url}: {e}")
+        msg = f"Netzwerkfehler beim Verarbeiten der Liste {url}: {e}"
+        logger.warning(msg)
         STATISTICS["failed_lists"] += 1
+        STATISTICS["error_message"] = msg
         return 0, 0, 0
     except asyncio.TimeoutError as e:
-        logger.warning(f"Netzwerk-Timeout bei der Liste {url}: {e}")
+        msg = f"Netzwerk-Timeout bei der Liste {url}: {e}"
+        logger.warning(msg)
         STATISTICS["failed_lists"] += 1
+        STATISTICS["error_message"] = msg
         return 0, 0, 0
     except Exception as e:
         logger.error(f"Unbekannter Fehler beim Verarbeiten der Liste {url}: {e}")
@@ -672,6 +676,11 @@ async def main():
                     gc.collect()
         if not processed_urls:
             logger.warning("Keine gültigen Domains gefunden")
+            STATISTICS["error_message"] = (
+                "Alle Listen konnten nicht geladen werden. Bitte "
+                "Netzwerkverbindung überprüfen."
+            )
+            STATISTICS["run_failed"] = True
             if global_mode != SystemMode.EMERGENCY:
                 send_email(
                     "Fehler im AdBlock-Skript",

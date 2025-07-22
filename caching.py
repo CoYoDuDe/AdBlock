@@ -233,6 +233,7 @@ class CacheManager:
     def __init__(self, db_path: str, flush_interval: int):
         self.db_path = db_path
         self.flush_interval = flush_interval
+        os.makedirs(TMP_DIR, exist_ok=True)
         self.domain_cache = HybridStorage(os.path.join(TMP_DIR, "domain_cache.db"))
         self.list_cache: Dict[str, Dict] = {}
         self.last_flush = time.time()
@@ -247,7 +248,8 @@ class CacheManager:
             return 1000
 
     def adjust_cache_size(self) -> None:
-        self.current_cache_size = max(1000, self.calculate_dynamic_cache_size())
+        self.current_cache_size = self.calculate_dynamic_cache_size()
+        self.save_domain_cache()
 
     def init_database(self) -> None:
         try:
@@ -277,12 +279,17 @@ class CacheManager:
 
     def save_domain_cache(self) -> None:
         try:
-            if len(self.domain_cache.ram_storage) > self.current_cache_size and self.domain_cache.use_ram:
+            if (
+                len(self.domain_cache.ram_storage) > self.current_cache_size
+                and self.domain_cache.use_ram
+            ):
                 sorted_items = sorted(
                     self.domain_cache.ram_storage.items(),
                     key=lambda x: x[1]["checked_at"],
                 )
-                self.domain_cache.ram_storage = dict(sorted_items[-self.current_cache_size :])
+                self.domain_cache.ram_storage = dict(
+                    sorted_items[-self.current_cache_size :]
+                )
         except Exception as exc:
             logger.warning("Fehler beim Speichern des Domain-Caches: %s", exc)
 
@@ -293,7 +300,10 @@ class CacheManager:
                 "checked_at": datetime.now().isoformat(),
                 "source": source_url,
             }
-            if len(self.domain_cache.ram_storage) > self.current_cache_size and self.domain_cache.use_ram:
+            if (
+                len(self.domain_cache.ram_storage) > self.current_cache_size
+                and self.domain_cache.use_ram
+            ):
                 oldest_domain = min(
                     self.domain_cache.ram_storage,
                     key=lambda k: self.domain_cache.ram_storage[k]["checked_at"],
@@ -307,7 +317,9 @@ class CacheManager:
             conn = sqlite3.connect(self.db_path, timeout=30)
             c = conn.cursor()
             c.execute("SELECT url, md5, last_checked FROM list_cache")
-            self.list_cache = {row[0]: {"md5": row[1], "last_checked": row[2]} for row in c.fetchall()}
+            self.list_cache = {
+                row[0]: {"md5": row[1], "last_checked": row[2]} for row in c.fetchall()
+            }
             conn.close()
             return self.list_cache
         except Exception as exc:
@@ -334,14 +346,18 @@ def cleanup_temp_files(cache_manager: CacheManager) -> None:
     try:
         list_cache = cache_manager.load_list_cache()
         valid_urls = set(list_cache.keys())
-        expiry = datetime.now() - timedelta(days=DEFAULT_CONFIG["domain_cache_validity_days"])
+        expiry = datetime.now() - timedelta(
+            days=DEFAULT_CONFIG["domain_cache_validity_days"]
+        )
         for file in os.listdir(TMP_DIR):
             file_path = os.path.join(TMP_DIR, file)
             if file.endswith(".tmp"):
                 url = file.replace("__", "/").replace("_", "://")
                 if file.startswith("trie_cache_"):
                     if url in list_cache:
-                        last_checked = datetime.fromisoformat(list_cache[url]["last_checked"])
+                        last_checked = datetime.fromisoformat(
+                            list_cache[url]["last_checked"]
+                        )
                         if last_checked < expiry:
                             os.remove(file_path)
                     else:
