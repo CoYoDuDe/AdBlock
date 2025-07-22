@@ -9,6 +9,7 @@ import hashlib
 import json
 import subprocess
 import time
+import shutil
 from collections import defaultdict
 from datetime import datetime
 from threading import Lock
@@ -334,6 +335,42 @@ def initialize_directories_and_files():
     except Exception as e:
         logger.error(f"Fehler beim Initialisieren der Verzeichnisse und Dateien: {e}")
         raise
+
+
+def restart_dnsmasq(config: dict) -> bool:
+    """Restart the DNSMasq service if possible."""
+    systemctl_available = shutil.which("systemctl") is not None
+    service_available = shutil.which("service") is not None
+
+    if systemctl_available:
+        try:
+            subprocess.run(["systemctl", "restart", "dnsmasq"], check=True)
+            logger.info("DNSMasq erfolgreich neu gestartet")
+            return True
+        except subprocess.CalledProcessError as exc:
+            logger.warning("Fehler beim Neustarten von DNSMasq via systemctl: %s", exc)
+
+    if service_available:
+        try:
+            subprocess.run(["service", "dnsmasq", "restart"], check=True)
+            logger.info("DNSMasq erfolgreich via service neu gestartet")
+            return True
+        except subprocess.CalledProcessError as exc:
+            logger.error("Fehler beim Neustarten von DNSMasq via service: %s", exc)
+            if global_mode != SystemMode.EMERGENCY:
+                send_email(
+                    "Fehler im AdBlock-Skript",
+                    f"DNSMasq-Neustart fehlgeschlagen: {exc}",
+                    config,
+                )
+            return False
+
+    if not systemctl_available and not service_available:
+        logger.warning(
+            "Weder systemctl noch service verfügbar, DNSMasq kann nicht neu gestartet werden"
+        )
+
+    return False
 
 
 # Die Funktionen zum Laden der Quelllisten sowie von White- und Blacklist sind
@@ -844,24 +881,7 @@ Empfehlungen:
         logger.info(summary)
         if CONFIG.get("send_email", False) and global_mode != SystemMode.EMERGENCY:
             send_email("AdBlock-Skript Bericht", summary, CONFIG)
-        try:
-            subprocess.run(["systemctl", "restart", "dnsmasq"], check=True)
-            logger.info("DNSMasq erfolgreich neu gestartet")
-        except subprocess.CalledProcessError as e:
-            logger.warning(
-                f"Fehler beim Neustarten von DNSMasq via systemctl: {e}, versuche Fallback..."
-            )
-            try:
-                subprocess.run(["service", "dnsmasq", "restart"], check=True)
-                logger.info("DNSMasq erfolgreich via service neu gestartet")
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Fehler beim Neustarten von DNSMasq: {e}")
-                if global_mode != SystemMode.EMERGENCY:
-                    send_email(
-                        "Fehler im AdBlock-Skript",
-                        f"DNSMasq-Neustart fehlgeschlagen: {e}",
-                        CONFIG,
-                    )
+        restart_dnsmasq(CONFIG)
         logger.info("Skript erfolgreich abgeschlossen")
     except Exception as e:
         logger.error(f"Kritischer Fehler in der Hauptfunktion: {e}")
