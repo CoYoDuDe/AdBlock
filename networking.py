@@ -157,5 +157,31 @@ def setup_git() -> bool:
         return False
 
 
-def upload_to_github() -> None:
-    logger.info("Hosts-Datei erfolgreich auf GitHub hochgeladen")
+def upload_to_github(config: dict) -> None:
+    """Commit hosts file and related artifacts to GitHub."""
+
+    repo = config.get("github_repo")
+    branch = config.get("github_branch", "main")
+    git_user = config.get("git_user")
+    git_email = config.get("git_email")
+
+    try:
+        subprocess.run(["git", "config", "user.name", git_user], check=True)
+        subprocess.run(["git", "config", "user.email", git_email], check=True)
+
+        files_to_add = [
+            config.get("hosts_file", "hosts.txt"),
+            config.get("dns_config_file", "dnsmasq.conf"),
+            "tmp",
+        ]
+        subprocess.run(["git", "add", *files_to_add], check=True)
+
+        commit_message = f"Update hosts {datetime.utcnow().isoformat()}"
+        subprocess.run(["git", "commit", "-m", commit_message], check=True)
+
+        subprocess.run(["git", "push", repo, f"HEAD:{branch}"], check=True)
+        logger.info("Hosts-Datei erfolgreich auf GitHub hochgeladen")
+    except subprocess.CalledProcessError as exc:
+        logger.error("Git-Befehl fehlgeschlagen: %s", exc)
+    except Exception as exc:  # pragma: no cover - unforeseen errors
+        logger.error("Fehler beim Upload zu GitHub: %s", exc)
