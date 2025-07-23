@@ -10,6 +10,8 @@ import json
 import subprocess
 import time
 import shutil
+from argparse import ArgumentParser
+import argparse
 from collections import defaultdict
 from datetime import datetime
 from threading import Lock
@@ -69,6 +71,22 @@ logged_messages = set()
 console_logged_messages = set()
 
 
+def parse_args(args: list[str] | None = None) -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = ArgumentParser(description="AdBlock hosts generator")
+    parser.add_argument(
+        "--config",
+        default=os.path.join(SCRIPT_DIR, "config.json"),
+        help="Pfad zur Konfigurationsdatei",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Aktiviere Debug-Logging",
+    )
+    return parser.parse_args(args)
+
+
 def log_once(level, message, console=True):
     if message not in logged_messages:
         logger.log(level, message)
@@ -119,8 +137,9 @@ STATISTICS = {
 logger = logging.getLogger(__name__)
 
 
-def load_config():
-    config_path = os.path.join(SCRIPT_DIR, "config.json")
+def load_config(config_path: str | None = None):
+    if config_path is None:
+        config_path = os.path.join(SCRIPT_DIR, "config.json")
     logger.debug(f"Versuche, Konfigurationsdatei zu laden: {config_path}")
     try:
         CONFIG.clear()
@@ -541,8 +560,8 @@ async def process_list(
         return 0, 0, 0
 
 
-async def main():
-    """Hauptfunktion des Skripts"""
+async def main(config_path: str | None = None, debug: bool = False):
+    """Hauptfunktion des Skripts."""
     cache_flush_task = None
     resource_monitor_task = None
     global cache_manager, global_mode
@@ -553,7 +572,10 @@ async def main():
         logger.debug(f"Freier Speicher: {free_memory:.2f} MB")
 
         logger.debug("Lade Konfiguration...")
-        load_config()
+        load_config(config_path)
+        if debug:
+            CONFIG["detailed_log"] = True
+            CONFIG["logging_level"] = "DEBUG"
         logger.debug("Konfiguration geladen")
 
         if free_memory < CONFIG["resource_thresholds"]["emergency_memory_mb"]:
@@ -918,10 +940,12 @@ Empfehlungen:
                 cache_manager.save_domain_cache()
 
 
-if __name__ == "__main__":
+def cli_main(cli_args: list[str] | None = None) -> None:
+    """Entry point for the command-line interface."""
+    args = parse_args(cli_args)
     try:
         logger.debug("Skript wird gestartet")
-        asyncio.run(main())
+        asyncio.run(main(config_path=args.config, debug=args.debug))
     except KeyboardInterrupt:
         logger.info("Skript durch Benutzer abgebrochen")
         sys.exit(0)
@@ -943,3 +967,7 @@ if __name__ == "__main__":
                 CONFIG,
             )
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    cli_main()

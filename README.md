@@ -12,8 +12,11 @@ Ein minimalistisches Tool zur Generierung von `hosts.txt`-basierten Werbeblocker
 ## ▶️ Start
 
 ```bash
-python adblock.py
+python adblock.py [--config path/zur/config.json] [--debug]
 ```
+
+* `--config` – optionaler Pfad zu einer alternativen `config.json`
+* `--debug` – aktiviert detailliertes Logging
 
 ## 🔧 Voraussetzungen
 
