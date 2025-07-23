@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import sys
+import hashlib
+import os
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -15,6 +18,7 @@ def test_adjust_cache_size(monkeypatch, tmp_path):
     temp_dir.mkdir()
     db_path = tmp_path / "cache.db"
     monkeypatch.setattr(adblock, "TMP_DIR", str(temp_dir))
+    monkeypatch.setattr(caching, "TMP_DIR", str(temp_dir), raising=False)
 
     def initial_size(self):
         return 5
@@ -67,3 +71,30 @@ def test_hybrid_storage_low_memory(monkeypatch, tmp_path):
         assert not storage.use_ram
     finally:
         storage.close()
+
+
+def test_cleanup_temp_files_trie_cache_expired(monkeypatch, tmp_path):
+    temp_dir = tmp_path / "tmp"
+    temp_dir.mkdir()
+    db_path = tmp_path / "cache.db"
+
+    monkeypatch.setattr(adblock, "TMP_DIR", str(temp_dir))
+    monkeypatch.setattr(caching, "TMP_DIR", str(temp_dir), raising=False)
+
+    cm = CacheManager(str(db_path), flush_interval=300)
+
+    url = "https://example.com/list"
+    url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()
+    trie_file = temp_dir / f"trie_cache_{url_hash}.db"
+    trie_file.write_text("dummy")
+
+    expired = datetime.now() - timedelta(
+        days=caching.DEFAULT_CONFIG["domain_cache_validity_days"] + 1
+    )
+    os.utime(trie_file, (expired.timestamp(), expired.timestamp()))
+
+    cm.save_list_cache({url: {"md5": "x", "last_checked": expired.isoformat()}})
+
+    caching.cleanup_temp_files(cm)
+
+    assert not trie_file.exists()
