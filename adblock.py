@@ -74,9 +74,10 @@ def log_once(level, message, console=True):
         logger.log(level, message)
         logged_messages.add(message)
     if console and message not in console_logged_messages:
-        print(
-            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {logging.getLevelName(level)} - {message}"
-        )
+        if level >= logging.ERROR:
+            logger.error(message)
+        else:
+            logger.info(message)
         console_logged_messages.add(message)
 
 
@@ -252,13 +253,15 @@ def setup_logging():
                 logger.error(
                     f"Fehler beim Erstellen des Log-Verzeichnisses {log_dir}: {e}"
                 )
-                print(f"Fehler beim Erstellen des Log-Verzeichnisses {log_dir}: {e}")
+                logger.error(
+                    f"Fehler beim Erstellen des Log-Verzeichnisses {log_dir}: {e}"
+                )
                 sys.exit(1)
             if not os.access(log_dir, os.W_OK):
                 logger.error(
                     f"Keine Schreibrechte für Log-Verzeichnis {log_dir}, beende Skript"
                 )
-                print(
+                logger.error(
                     f"Keine Schreibrechte für Log-Verzeichnis {log_dir}, beende Skript"
                 )
                 sys.exit(1)
@@ -296,7 +299,7 @@ def setup_logging():
         logger.debug(f"Logging konfiguriert mit Level {logging.getLevelName(level)}")
         logger.info("Logging erfolgreich konfiguriert")
     except Exception as e:
-        print(f"Fehler beim Einrichten des Loggings: {e}")
+        logger.error(f"Fehler beim Einrichten des Loggings: {e}")
         sys.exit(1)
 
 
