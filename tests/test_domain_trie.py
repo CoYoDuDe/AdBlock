@@ -7,12 +7,14 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from adblock import DomainTrie  # noqa: E402
 import adblock  # noqa: E402
+import caching  # noqa: E402
 
 
 def test_insert_and_has_parent(tmp_path, monkeypatch):
     temp_dir = tmp_path / "tmp"
     temp_dir.mkdir()
     monkeypatch.setattr(adblock, "TMP_DIR", str(temp_dir))
+    monkeypatch.setattr(caching, "TMP_DIR", str(temp_dir), raising=False)
     adblock.CONFIG.clear()
     adblock.CONFIG.update(adblock.DEFAULT_CONFIG)
     trie = DomainTrie("test_url")
