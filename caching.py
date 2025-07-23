@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional
 import psutil
 from pybloom_live import ScalableBloomFilter
 
-from config import DEFAULT_CONFIG, TMP_DIR, TRIE_CACHE_PATH
+from config import DEFAULT_CONFIG, TMP_DIR, TRIE_CACHE_PATH, DB_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -350,26 +350,38 @@ class CacheManager:
 
 
 def cleanup_temp_files(cache_manager: CacheManager) -> None:
+    """Remove outdated temporary and cache files."""
+
     try:
         list_cache = cache_manager.load_list_cache()
         valid_urls = set(list_cache.keys())
         expiry = datetime.now() - timedelta(
             days=DEFAULT_CONFIG["domain_cache_validity_days"]
         )
+
+        valid_trie_basenames = {
+            f"trie_cache_{hashlib.md5(url.encode('utf-8')).hexdigest()}"
+            for url in valid_urls
+        }
+
         for file in os.listdir(TMP_DIR):
             file_path = os.path.join(TMP_DIR, file)
-            if file.endswith(".tmp"):
+            file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
+
+            if file.startswith("trie_cache_"):
+                basename, _ = os.path.splitext(file)
+                if basename not in valid_trie_basenames or file_mtime < expiry:
+                    os.remove(file_path)
+                continue
+
+            if file.endswith(".db") and file != os.path.basename(DB_PATH):
+                if file_mtime < expiry:
+                    os.remove(file_path)
+                continue
+
+            if file.endswith(".tmp") or file.endswith(".filtered"):
                 url = file.replace("__", "/").replace("_", "://")
-                if file.startswith("trie_cache_"):
-                    if url in list_cache:
-                        last_checked = datetime.fromisoformat(
-                            list_cache[url]["last_checked"]
-                        )
-                        if last_checked < expiry:
-                            os.remove(file_path)
-                    else:
-                        os.remove(file_path)
-                elif url not in valid_urls:
+                if url not in valid_urls:
                     os.remove(file_path)
     except Exception as exc:
         logger.error("Fehler beim Bereinigen temporärer Dateien: %s", exc)
