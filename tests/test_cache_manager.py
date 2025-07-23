@@ -7,6 +7,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from adblock import CacheManager  # noqa: E402
 import adblock  # noqa: E402
+import caching  # noqa: E402
 
 
 def test_adjust_cache_size(monkeypatch, tmp_path):
@@ -50,3 +51,19 @@ def test_adjust_cache_size(monkeypatch, tmp_path):
     assert set(cm.domain_cache.ram_storage.keys()) == {"domain2.com", "domain3.com", "domain4.com"}
 
     cm.domain_cache.close()
+
+
+def test_hybrid_storage_low_memory(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    temp_db = tmp_path / "cache.db"
+
+    def fake_virtual_memory():
+        return SimpleNamespace(available=25 * 1024 * 1024)
+
+    monkeypatch.setattr(caching.psutil, "virtual_memory", fake_virtual_memory)
+
+    storage = caching.HybridStorage(str(temp_db))
+    try:
+        assert not storage.use_ram
+    finally:
+        storage.close()

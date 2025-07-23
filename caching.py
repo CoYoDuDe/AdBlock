@@ -59,7 +59,14 @@ class HybridStorage:
     def should_use_ram(self) -> bool:
         try:
             free_memory = psutil.virtual_memory().available
-            return free_memory > self.ram_threshold or free_memory < 50 * 1024 * 1024
+            emergency_threshold = (
+                DEFAULT_CONFIG["resource_thresholds"]["emergency_memory_mb"]
+                * 1024
+                * 1024
+            )
+            return (
+                free_memory > self.ram_threshold and free_memory > emergency_threshold
+            )
         except Exception as exc:
             logger.warning("RAM check failed: %s", exc)
             return True
