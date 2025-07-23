@@ -13,6 +13,12 @@ MAX_DNS_CACHE_SIZE = 10000
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 
+# Default sources used when no hosts_sources.conf file exists
+DEFAULT_HOST_SOURCES = [
+    "https://adaway.org/hosts.txt",
+    "https://v.firebog.net/hosts/Easyprivacy.txt",
+]
+
 DOMAIN_PATTERN = re.compile(r"^(?:0\.0\.0\.0|127\.0\.0\.1|::1|[0-9a-fA-F:]+)\s+(\S+)|^\s*(\S+)|^\|\|([^\^]+)\^$")
 DOMAIN_VALIDATOR = re.compile(
     r"^(?!-|\.)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"

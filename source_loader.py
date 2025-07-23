@@ -7,6 +7,7 @@ import os
 import logging
 
 from filter_engine import ist_gueltige_domain
+from config import DEFAULT_HOST_SOURCES
 
 
 def load_hosts_sources(
@@ -21,14 +22,7 @@ def load_hosts_sources(
                 sources_path,
             )
             with open(sources_path, "w", encoding="utf-8") as f:
-                f.write(
-                    "\n".join(
-                        [
-                            "https://adaway.org/hosts.txt",
-                            "https://v.firebog.net/hosts/Easyprivacy.txt",
-                        ]
-                    )
-                )
+                f.write("\n".join(DEFAULT_HOST_SOURCES))
         with open(sources_path, "r", encoding="utf-8") as f:
             sources = [
                 line.strip() for line in f if line.strip() and not line.startswith("#")
