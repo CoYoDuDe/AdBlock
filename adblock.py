@@ -845,7 +845,7 @@ async def main():
             ) as f:
                 await f.write("\n".join(unreachable_domains))
         if CONFIG["github_upload"] and global_mode != SystemMode.EMERGENCY:
-            upload_to_github()
+            upload_to_github(CONFIG)
         safe_save(
             os.path.join(TMP_DIR, "statistics.json"),
             STATISTICS,
