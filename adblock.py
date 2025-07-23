@@ -31,6 +31,7 @@ from caching import (
 from config import (
     DB_PATH,
     DEFAULT_CONFIG,
+    DEFAULT_HOST_SOURCES,
     LOG_FORMAT,
     REACHABLE_FILE,
     SCRIPT_DIR,
@@ -314,12 +315,7 @@ def initialize_directories_and_files():
             ("config.json", DEFAULT_CONFIG, True),
             (
                 "hosts_sources.conf",
-                "\n".join(
-                    [
-                        "https://adaway.org/hosts.txt",
-                        "https://v.firebog.net/hosts/Easyprivacy.txt",
-                    ]
-                ),
+                "\n".join(DEFAULT_HOST_SOURCES),
                 False,
             ),
             ("whitelist.txt", "# Whitelist für Domains, eine pro Zeile\n", False),
