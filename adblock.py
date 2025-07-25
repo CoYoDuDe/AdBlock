@@ -272,14 +272,8 @@ def setup_logging():
                 logger.error(
                     f"Fehler beim Erstellen des Log-Verzeichnisses {log_dir}: {e}"
                 )
-                logger.error(
-                    f"Fehler beim Erstellen des Log-Verzeichnisses {log_dir}: {e}"
-                )
                 sys.exit(1)
             if not os.access(log_dir, os.W_OK):
-                logger.error(
-                    f"Keine Schreibrechte für Log-Verzeichnis {log_dir}, beende Skript"
-                )
                 logger.error(
                     f"Keine Schreibrechte für Log-Verzeichnis {log_dir}, beende Skript"
                 )
