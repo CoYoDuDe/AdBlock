@@ -27,7 +27,7 @@ python adblock.py [--config path/zur/config.json] [--debug]
 ## 🛠️ Setup
 
 ```bash
-pip install -r requirements.txt
+./setup_env.sh
 ```
 
 ## ❓ Troubleshooting

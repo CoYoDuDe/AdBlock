@@ -13,9 +13,7 @@
 !requirements.txt
 !.flake8
 !hosts_sources.conf
-!tests/
-!tests/**
-!tests/test_cli.py
+!setup_env.sh
 __pycache__/
 *.pyc
 tmp/
