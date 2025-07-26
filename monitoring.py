@@ -18,9 +18,9 @@ async def check_network_latency(config: dict) -> float:
         resolver = aiodns.DNSResolver(
             nameservers=[config["dns_servers"][0]], timeout=5.0
         )
-        start = asyncio.get_event_loop().time()
+        start = asyncio.get_running_loop().time()
         await resolver.query("example.com", "A")
-        latency = asyncio.get_event_loop().time() - start
+        latency = asyncio.get_running_loop().time() - start
         return latency
     except Exception:
         return float("inf")

@@ -1,4 +1,4 @@
-"""Hilfsroutinen zum sicheren Schreiben von Ausgabedateien und Statistiken."""
+"""Hilfsfunktionen zum sicheren Schreiben von Ausgabedateien und Statistiken."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from urllib.parse import quote
 def safe_save(
     filepath: str, content, logger: logging.Logger, is_json: bool = False
 ) -> None:
-    """Safely save content to a file."""
+    """Speichert Inhalte sicher in einer Datei."""
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             if is_json:
@@ -29,7 +29,7 @@ def safe_save(
 def export_statistics_csv(
     tmp_dir: str, statistics: Dict, logger: logging.Logger
 ) -> None:
-    """Export statistics to a CSV file."""
+    """Exportiert Statistiken in eine CSV-Datei."""
     csv_path = os.path.join(tmp_dir, "statistics.csv")
     try:
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -73,7 +73,7 @@ def export_prometheus_metrics(
     cache_size: int,
     logger: logging.Logger,
 ) -> None:
-    """Write prometheus metrics file."""
+    """Schreibt eine Prometheus-Metrikdatei."""
     metrics_path = os.path.join(tmp_dir, "metrics.prom")
     try:
         with open(metrics_path, "w", encoding="utf-8") as f:

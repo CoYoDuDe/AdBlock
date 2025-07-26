@@ -63,7 +63,6 @@ class SystemMode(Enum):
 CONFIG = {}
 DNS_CACHE = {}
 dns_cache_lock = Lock()
-cache_flush_lock = asyncio.Lock()
 cache_manager = None
 global_mode = SystemMode.NORMAL
 
@@ -556,6 +555,7 @@ async def process_list(
 
 async def main(config_path: str | None = None, debug: bool = False):
     """Hauptfunktion des Skripts."""
+    cache_flush_lock = asyncio.Lock()
     cache_flush_task = None
     resource_monitor_task = None
     global cache_manager, global_mode
@@ -828,7 +828,7 @@ async def main(config_path: str | None = None, debug: bool = False):
             logger.debug(
                 f"IPv4-Ausgabe aktiviert, {len(dnsmasq_lines)} Einträge für dnsmasq.conf mit IPv4"
             )
-        if CONFIG["use_ipv6_output"] and await is_ipv6_supported():
+        if CONFIG["use_ipv6_output"] and await is_ipv6_supported(CONFIG):
             dnsmasq_lines.extend(
                 f"address=/{domain}/{CONFIG['web_server_ipv6']}"
                 for domain in sorted_domains

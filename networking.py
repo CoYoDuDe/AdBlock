@@ -59,9 +59,9 @@ async def select_best_dns_server(
     async def test_server(server: str) -> Tuple[str, float]:
         try:
             resolver = aiodns.DNSResolver(nameservers=[server], timeout=timeout)
-            start = asyncio.get_event_loop().time()
+            start = asyncio.get_running_loop().time()
             await resolver.query("example.com", "A")
-            latency = asyncio.get_event_loop().time() - start
+            latency = asyncio.get_running_loop().time() - start
             return server, latency
         except Exception:
             return server, float("inf")
