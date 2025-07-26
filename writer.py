@@ -1,4 +1,4 @@
-"""Helper routines for safely writing output files and statistics."""
+"""Hilfsroutinen zum sicheren Schreiben von Ausgabedateien und Statistiken."""
 
 from __future__ import annotations
 

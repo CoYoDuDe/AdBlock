@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Caching related classes and utilities."""
+"""Caching-bezogene Klassen und Hilfsfunktionen."""
 
 from __future__ import annotations
 
