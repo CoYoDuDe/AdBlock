@@ -1,7 +1,7 @@
-"""Hilfsfunktionen zum Parsen von Domains und Bewerten von Listen.
+"""Hilfsfunktionen zum Parsen von Domains und zum Bewerten von Listen.
 
-Dieses Modul validiert und extrahiert Domains aus Host-Listen und berechnet
-Metriken, um die Quelllisten zu bewerten.
+Dieses Modul validiert Host-Listen, extrahiert g\xc3\xbcltige Domains und
+berechnet Metriken, um die Quelllisten zu beurteilen.
 """
 
 from __future__ import annotations
