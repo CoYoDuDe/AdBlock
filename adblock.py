@@ -828,7 +828,7 @@ async def main(config_path: str | None = None, debug: bool = False):
             logger.debug(
                 f"IPv4-Ausgabe aktiviert, {len(dnsmasq_lines)} Einträge für dnsmasq.conf mit IPv4"
             )
-        if CONFIG["use_ipv6_output"] and await is_ipv6_supported():
+        if CONFIG["use_ipv6_output"] and await is_ipv6_supported(CONFIG):
             dnsmasq_lines.extend(
                 f"address=/{domain}/{CONFIG['web_server_ipv6']}"
                 for domain in sorted_domains
