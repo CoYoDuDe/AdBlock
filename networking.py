@@ -1,4 +1,4 @@
-"""Networking helper functions."""
+"""Netzwerkbezogene Hilfsfunktionen."""
 
 from __future__ import annotations
 
