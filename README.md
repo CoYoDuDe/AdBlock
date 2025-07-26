@@ -48,6 +48,14 @@ adblock.py      # Hauptskript
 hosts.txt       # Generierte Hostdatei
 ```
 
+## 🧪 Tests
+
+Die Tests werden mit `pytest` ausgeführt:
+
+```bash
+pytest
+```
+
 ## 📄 Lizenz
 
 MIT © CoYoDuDe
