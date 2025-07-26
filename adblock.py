@@ -750,7 +750,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                                     cache_manager,
                                     whitelist,
                                     blacklist,
-                                    DNS_CACHE,
+                                    cache_manager.dns_cache,
                                     dns_cache_lock,
                                     max_concurrent_dns,
                                 )
@@ -801,7 +801,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                             cache_manager,
                             whitelist,
                             blacklist,
-                            DNS_CACHE,
+                            cache_manager.dns_cache,
                             dns_cache_lock,
                             max_concurrent_dns,
                         )
