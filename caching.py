@@ -19,9 +19,19 @@ from typing import Any, Dict, Optional
 import psutil
 from pybloom_live import ScalableBloomFilter
 
-from config import DEFAULT_CONFIG, TMP_DIR, TRIE_CACHE_PATH, DB_PATH
+from collections import OrderedDict
+
+from config import (
+    DEFAULT_CONFIG,
+    TMP_DIR,
+    TRIE_CACHE_PATH,
+    DB_PATH,
+    MAX_DNS_CACHE_SIZE,
+)
 
 logger = logging.getLogger(__name__)
+
+dns_cache: OrderedDict[str, bool] = OrderedDict()
 
 
 class HybridStorage:
@@ -243,6 +253,7 @@ class CacheManager:
         os.makedirs(TMP_DIR, exist_ok=True)
         self.domain_cache = HybridStorage(os.path.join(TMP_DIR, "domain_cache.db"))
         self.list_cache: Dict[str, Dict] = {}
+        self.dns_cache = dns_cache
         self.last_flush = time.time()
         self.current_cache_size = self.calculate_dynamic_cache_size()
         self.init_database()
@@ -283,6 +294,18 @@ class CacheManager:
 
     def load_domain_cache(self):
         return self.domain_cache
+
+    def get_dns_cache(self, domain: str) -> Optional[bool]:
+        if domain in self.dns_cache:
+            self.dns_cache.move_to_end(domain)
+            return self.dns_cache[domain]
+        return None
+
+    def save_dns_cache(self, domain: str, reachable: bool) -> None:
+        self.dns_cache[domain] = reachable
+        self.dns_cache.move_to_end(domain)
+        if len(self.dns_cache) > MAX_DNS_CACHE_SIZE:
+            self.dns_cache.popitem(last=False)
 
     def save_domain_cache(self) -> None:
         try:
