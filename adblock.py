@@ -69,7 +69,6 @@ class SystemMode(Enum):
 
 
 CONFIG = {}
-DNS_CACHE = {}
 dns_cache_lock = Lock()
 cache_manager = None
 global_mode = SystemMode.NORMAL

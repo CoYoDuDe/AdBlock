@@ -118,6 +118,9 @@ async def test_single_domain_async(
         return False
     if domain in blacklist:
         return True
+    cached_dns = cache_manager.get_dns_cache(domain)
+    if cached_dns is not None:
+        return cached_dns
     cache = cache_manager.load_domain_cache()
     if domain in cache:
         entry = cache[domain]
@@ -135,6 +138,7 @@ async def test_single_domain_async(
     reachable = await test_dns_entry_async(
         domain, resolver, max_concurrent=max_concurrent
     )
+    cache_manager.save_dns_cache(domain, reachable)
     cache_manager.save_domain(domain, reachable, url)
     if dns_cache is not None and cache_lock is not None:
         with cache_lock:
