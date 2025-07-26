@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Caching related classes and utilities."""
+"""Caching-bezogene Klassen und Hilfsfunktionen."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 class HybridStorage:
-    """Hybrid storage using RAM and shelve on disk."""
+    """Hybrider Speicher, der RAM und Shelve auf der Festplatte verwendet."""
 
     def __init__(self, db_path: str):
         logger.debug("Initializing HybridStorage with db_path: %s", db_path)
@@ -151,7 +151,7 @@ class TrieNode:
 
 
 class DomainTrie:
-    """Trie for fast domain lookups."""
+    """Trie für schnelle Domain-Abfragen."""
 
     def __init__(self, url: str):
         url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()
@@ -235,7 +235,7 @@ def load_trie_cache(all_domains_hash: str, url: str) -> Optional[DomainTrie]:
 
 
 class CacheManager:
-    """Manage domain and list caches."""
+    """Verwaltet Domain- und Listen-Caches."""
 
     def __init__(self, db_path: str, flush_interval: int):
         self.db_path = db_path
@@ -350,7 +350,7 @@ class CacheManager:
 
 
 def cleanup_temp_files(cache_manager: CacheManager) -> None:
-    """Remove outdated temporary and cache files."""
+    """Entfernt veraltete temporäre Dateien und Cache-Dateien."""
 
     try:
         list_cache = cache_manager.load_list_cache()
