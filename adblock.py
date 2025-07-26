@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import sys
+
+try:
+    import aiohttp
+    import aiodns
+    import psutil
+    import aiofiles
+except ImportError:
+    print(
+        "Bitte ./setup_env.sh ausführen oder 'pip install -r requirements.txt'",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 import logging
 import os
-import sys
 import gc
 import hashlib
 import json
@@ -16,13 +29,8 @@ from collections import defaultdict
 from datetime import datetime
 from threading import Lock
 import socket
-import aiodns
-
-import aiofiles
-import aiohttp
 import asyncio
 import backoff
-import psutil
 from enum import Enum
 
 from caching import (
