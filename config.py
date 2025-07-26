@@ -4,12 +4,11 @@ import re
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 TMP_DIR = os.path.join(SCRIPT_DIR, "tmp")
 DB_PATH = os.path.join(TMP_DIR, "adblock_cache.db")
-HOSTS_HASH_PATH = os.path.join(TMP_DIR, "hosts_hash.txt")
 TRIE_CACHE_PATH = os.path.join(TMP_DIR, "trie_cache.pkl")
 REACHABLE_FILE = os.path.join(TMP_DIR, "reachable.txt")
 UNREACHABLE_FILE = os.path.join(TMP_DIR, "unreachable.txt")
-
 MAX_DNS_CACHE_SIZE = 10000
+DNS_CACHE_TTL = 3600
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 
@@ -57,6 +56,7 @@ DEFAULT_CONFIG = {
     "save_unreachable": True,
     "prioritize_lists": True,
     "domain_timeout": 3,
+    "dns_cache_ttl": DNS_CACHE_TTL,
     "domain_cache_validity_days": 7,
     "cache_flush_interval": 300,
     "cache_trie": True,
