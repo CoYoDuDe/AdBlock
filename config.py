@@ -1,5 +1,14 @@
 import os
 import re
+from threading import Lock
+
+CONFIG = {}
+dns_cache_lock = Lock()
+cache_manager = None
+global_mode = None
+DNS_CACHE: dict[str, dict[str, float]] = {}
+logged_messages = set()
+console_logged_messages = set()
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 TMP_DIR = os.path.join(SCRIPT_DIR, "tmp")

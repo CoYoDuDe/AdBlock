@@ -27,7 +27,6 @@ from argparse import ArgumentParser
 import argparse
 from collections import defaultdict
 from datetime import datetime
-from threading import Lock
 import socket
 import asyncio
 import backoff
@@ -39,6 +38,7 @@ from caching import (
     cleanup_temp_files,
     dns_cache as DNS_CACHE,
 )
+import config
 from config import (
     DB_PATH,
     DEFAULT_CONFIG,
@@ -48,6 +48,11 @@ from config import (
     SCRIPT_DIR,
     TMP_DIR,
     UNREACHABLE_FILE,
+    CONFIG,
+    dns_cache_lock,
+    DNS_CACHE,
+    logged_messages,
+    console_logged_messages,
 )
 from filter_engine import evaluate_lists, parse_domains
 from monitoring import get_system_resources, monitor_resources
@@ -67,15 +72,6 @@ class SystemMode(Enum):
     NORMAL = "normal"
     LOW_MEMORY = "low_memory"
     EMERGENCY = "emergency"
-
-
-CONFIG = {}
-dns_cache_lock = Lock()
-cache_manager = None
-global_mode = SystemMode.NORMAL
-
-logged_messages = set()
-console_logged_messages = set()
 
 
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:
@@ -291,7 +287,7 @@ def setup_logging():
         )
         if CONFIG.get("detailed_log", False):
             level = logging.DEBUG
-        elif global_mode == SystemMode.EMERGENCY:
+        elif config.global_mode == SystemMode.EMERGENCY:
             level = logging.ERROR
 
         logger.handlers.clear()
@@ -376,7 +372,7 @@ def restart_dnsmasq(config: dict) -> bool:
             return True
         except subprocess.CalledProcessError as exc:
             logger.error("Fehler beim Neustarten von DNSMasq via service: %s", exc)
-            if global_mode != SystemMode.EMERGENCY:
+            if config.global_mode != SystemMode.EMERGENCY:
                 send_email(
                     "Fehler im AdBlock-Skript",
                     f"DNSMasq-Neustart fehlgeschlagen: {exc}",
@@ -410,7 +406,7 @@ async def process_list(
 ) -> tuple[int, int, int]:
     """Verarbeitet eine Blockliste und extrahiert Domains"""
     try:
-        if global_mode == SystemMode.EMERGENCY:
+        if config.global_mode == SystemMode.EMERGENCY:
             log_once(
                 logging.WARNING,
                 f"Emergency-Mode: Liste {url} wird übersprungen, um Ressourcen zu sparen",
@@ -470,7 +466,8 @@ async def process_list(
                 trie.storage.update_threshold()
                 _, batch_size, _ = get_system_resources()
                 batch_size = min(
-                    batch_size, 10 if global_mode == SystemMode.EMERGENCY else 20
+                    batch_size,
+                    10 if config.global_mode == SystemMode.EMERGENCY else 20,
                 )
                 if (
                     free_memory
@@ -566,7 +563,6 @@ async def main(config_path: str | None = None, debug: bool = False):
     cache_flush_lock = asyncio.Lock()
     cache_flush_task = None
     resource_monitor_task = None
-    global cache_manager, global_mode
     try:
         start_time = time.time()
         logger.info("Starte AdBlock-Skript")
@@ -586,16 +582,16 @@ async def main(config_path: str | None = None, debug: bool = False):
                 f"Kritischer Speicherstand vor Start: {free_memory:.2f} MB frei, aktiviere Emergency-Mode",
                 console=True,
             )
-            global_mode = SystemMode.EMERGENCY
+            config.global_mode = SystemMode.EMERGENCY
         elif free_memory < CONFIG["resource_thresholds"]["low_memory_mb"]:
             log_once(
                 logging.WARNING,
                 f"Niedriger Speicherstand vor Start: {free_memory:.2f} MB frei, aktiviere Low-Memory-Mode",
                 console=True,
             )
-            global_mode = SystemMode.LOW_MEMORY
+            config.global_mode = SystemMode.LOW_MEMORY
         else:
-            global_mode = SystemMode.NORMAL
+            config.global_mode = SystemMode.NORMAL
 
         logger.debug("Richte Logging ein...")
         setup_logging()
@@ -606,8 +602,8 @@ async def main(config_path: str | None = None, debug: bool = False):
         logger.debug("Temporäres Verzeichnis erstellt")
 
         logger.debug("Initialisiere CacheManager...")
-        cache_manager = CacheManager(DB_PATH, CONFIG["cache_flush_interval"])
-        if cache_manager is None:
+        config.cache_manager = CacheManager(DB_PATH, CONFIG["cache_flush_interval"])
+        if config.cache_manager is None:
             raise ValueError("CacheManager konnte nicht initialisiert werden")
         logger.debug("CacheManager initialisiert")
 
@@ -616,16 +612,18 @@ async def main(config_path: str | None = None, debug: bool = False):
         logger.debug("Verzeichnisse und Dateien initialisiert")
 
         logger.debug("Bereinige temporäre Dateien...")
-        cleanup_temp_files(cache_manager)
+        cleanup_temp_files(config.cache_manager)
         logger.debug("Temporäre Dateien bereinigt")
 
         memory = psutil.Process().memory_info().rss / (1024 * 1024)
         logger.info(f"Initialer Speicherverbrauch: {memory:.2f} MB")
 
         logger.debug("Starte Cache-Flush- und Ressourcenüberwachungs-Tasks...")
-        cache_flush_task = asyncio.create_task(cache_manager.flush_cache_periodically())
+        cache_flush_task = asyncio.create_task(
+            config.cache_manager.flush_cache_periodically()
+        )
         resource_monitor_task = asyncio.create_task(
-            monitor_resources(cache_manager, CONFIG)
+            monitor_resources(config.cache_manager, CONFIG)
         )
         logger.debug("Cache-Flush- und Ressourcenüberwachungs-Tasks gestartet")
 
@@ -641,7 +639,7 @@ async def main(config_path: str | None = None, debug: bool = False):
         sources = load_hosts_sources(CONFIG, SCRIPT_DIR, logger)
         if not sources:
             logger.error("Keine Quell-URLs in hosts_sources.conf gefunden")
-            if global_mode != SystemMode.EMERGENCY:
+            if config.global_mode != SystemMode.EMERGENCY:
                 send_email(
                     "Fehler im AdBlock-Skript",
                     "Keine Quell-URLs in hosts_sources.conf gefunden",
@@ -669,7 +667,9 @@ async def main(config_path: str | None = None, debug: bool = False):
             max_jobs, _, _ = get_system_resources()
             for i in range(0, len(sources), max_jobs):
                 batch = sources[i : i + max_jobs]
-                tasks = [process_list(url, cache_manager, session) for url in batch]
+                tasks = [
+                    process_list(url, config.cache_manager, session) for url in batch
+                ]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for url, result in zip(batch, results):
                     if isinstance(result, (aiohttp.ClientError, asyncio.TimeoutError)):
@@ -704,7 +704,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                 "Netzwerkverbindung überprüfen."
             )
             STATISTICS["run_failed"] = True
-            if global_mode != SystemMode.EMERGENCY:
+            if config.global_mode != SystemMode.EMERGENCY:
                 send_email(
                     "Fehler im AdBlock-Skript",
                     "Keine gültigen Domains gefunden",
@@ -740,7 +740,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                         domain = line.strip()
                         if domain:
                             free_memory = psutil.virtual_memory().available
-                            cache_manager.domain_cache.update_threshold()
+                            config.cache_manager.domain_cache.update_threshold()
                             _, batch_size, max_concurrent_dns = get_system_resources()
                             domains.append(domain)
                             if len(domains) >= batch_size:
@@ -748,7 +748,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                                     domains,
                                     url,
                                     resolver,
-                                    cache_manager,
+                                    config.cache_manager,
                                     whitelist,
                                     blacklist,
                                     cache_manager.dns_cache,
@@ -789,17 +789,17 @@ async def main(config_path: str | None = None, debug: bool = False):
                                         f"reduziere Cache",
                                         console=True,
                                     )
-                                    cache_manager.current_cache_size = max(
-                                        2, cache_manager.current_cache_size // 2
+                                    config.cache_manager.current_cache_size = max(
+                                        2, config.cache_manager.current_cache_size // 2
                                     )
-                                    cache_manager.adjust_cache_size()
-                                    cache_manager.domain_cache.use_ram = False
+                                    config.cache_manager.adjust_cache_size()
+                                    config.cache_manager.domain_cache.use_ram = False
                     if domains:
                         results = await test_domain_batch(
                             domains,
                             url,
                             resolver,
-                            cache_manager,
+                            config.cache_manager,
                             whitelist,
                             blacklist,
                             cache_manager.dns_cache,
@@ -872,7 +872,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                 os.path.join(TMP_DIR, "unreachable.txt"), "w", encoding="utf-8"
             ) as f:
                 await f.write("\n".join(unreachable_domains))
-        if CONFIG["github_upload"] and global_mode != SystemMode.EMERGENCY:
+        if CONFIG["github_upload"] and config.global_mode != SystemMode.EMERGENCY:
             upload_to_github(CONFIG)
         safe_save(
             os.path.join(TMP_DIR, "statistics.json"),
@@ -880,14 +880,14 @@ async def main(config_path: str | None = None, debug: bool = False):
             logger,
             is_json=True,
         )
-        if global_mode != SystemMode.EMERGENCY:
+        if config.global_mode != SystemMode.EMERGENCY:
             export_statistics_csv(TMP_DIR, STATISTICS, logger)
             if CONFIG["export_prometheus"]:
                 export_prometheus_metrics(
                     TMP_DIR,
                     STATISTICS,
                     start_time,
-                    len(cache_manager.domain_cache.ram_storage),
+                    len(config.cache_manager.domain_cache.ram_storage),
                     logger,
                 )
         recommendations = (
@@ -915,13 +915,16 @@ Empfehlungen:
 """
         logger.info("Zusammenfassung erfolgreich erstellt")
         logger.info(summary)
-        if CONFIG.get("send_email", False) and global_mode != SystemMode.EMERGENCY:
+        if (
+            CONFIG.get("send_email", False)
+            and config.global_mode != SystemMode.EMERGENCY
+        ):
             send_email("AdBlock-Skript Bericht", summary, CONFIG)
         restart_dnsmasq(CONFIG)
         logger.info("Skript erfolgreich abgeschlossen")
     except Exception as e:
         logger.error(f"Kritischer Fehler in der Hauptfunktion: {e}")
-        if global_mode != SystemMode.EMERGENCY:
+        if config.global_mode != SystemMode.EMERGENCY:
             send_email(
                 "Kritischer Fehler im AdBlock-Skript",
                 f"Skript fehlgeschlagen: {e}",
@@ -941,9 +944,9 @@ Empfehlungen:
                 await resource_monitor_task
             except asyncio.CancelledError:
                 logger.debug("resource_monitor_task erfolgreich abgebrochen")
-        if cache_manager:
+        if config.cache_manager:
             async with cache_flush_lock:
-                cache_manager.save_domain_cache()
+                config.cache_manager.save_domain_cache()
 
 
 def cli_main(cli_args: list[str] | None = None) -> None:
@@ -957,7 +960,7 @@ def cli_main(cli_args: list[str] | None = None) -> None:
         sys.exit(0)
     except MemoryError:
         logger.error("Skript abgebrochen: Nicht genügend Speicher verfügbar")
-        if global_mode != SystemMode.EMERGENCY:
+        if config.global_mode != SystemMode.EMERGENCY:
             send_email(
                 "Kritischer Fehler im AdBlock-Skript",
                 "Skript abgebrochen: Nicht genügend Speicher verfügbar",
@@ -966,7 +969,7 @@ def cli_main(cli_args: list[str] | None = None) -> None:
         sys.exit(1)
     except Exception as e:
         logger.error(f"Kritischer Fehler beim Start des Skripts: {e}")
-        if global_mode != SystemMode.EMERGENCY:
+        if config.global_mode != SystemMode.EMERGENCY:
             send_email(
                 "Kritischer Fehler im AdBlock-Skript",
                 f"Skript fehlgeschlagen: {e}",
