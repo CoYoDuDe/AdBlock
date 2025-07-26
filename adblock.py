@@ -37,6 +37,7 @@ from caching import (
     CacheManager,
     DomainTrie,
     cleanup_temp_files,
+    dns_cache as DNS_CACHE,
 )
 from config import (
     DB_PATH,
