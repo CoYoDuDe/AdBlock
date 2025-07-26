@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from threading import Lock
 import logging
+import time
 import subprocess
 from datetime import datetime, timedelta
 from typing import List, Tuple
@@ -12,7 +14,7 @@ import aiodns
 from email.mime.text import MIMEText
 import smtplib
 
-from config import DEFAULT_CONFIG
+from config import DEFAULT_CONFIG, DNS_CACHE_TTL, MAX_DNS_CACHE_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,8 @@ async def test_single_domain_async(
     cache_manager,
     whitelist: set[str],
     blacklist: set[str],
+    dns_cache: dict | None = None,
+    cache_lock: Lock | None = None,
     max_concurrent: int = 5,
 ) -> bool:
     if domain in whitelist:
@@ -122,10 +126,22 @@ async def test_single_domain_async(
             days=DEFAULT_CONFIG["domain_cache_validity_days"]
         ):
             return entry["reachable"]
+
+    if dns_cache is not None and cache_lock is not None:
+        with cache_lock:
+            info = dns_cache.get(domain)
+            if info and time.time() - info["timestamp"] < DNS_CACHE_TTL:
+                return info["reachable"]
     reachable = await test_dns_entry_async(
         domain, resolver, max_concurrent=max_concurrent
     )
     cache_manager.save_domain(domain, reachable, url)
+    if dns_cache is not None and cache_lock is not None:
+        with cache_lock:
+            if len(dns_cache) >= MAX_DNS_CACHE_SIZE:
+                oldest_key = min(dns_cache, key=lambda k: dns_cache[k]["timestamp"])
+                dns_cache.pop(oldest_key)
+            dns_cache[domain] = {"reachable": reachable, "timestamp": time.time()}
     return reachable
 
 
@@ -136,11 +152,21 @@ async def test_domain_batch(
     cache_manager,
     whitelist: set[str],
     blacklist: set[str],
+    dns_cache: dict | None = None,
+    cache_lock: Lock | None = None,
     max_concurrent: int = 5,
 ):
     tasks = [
         test_single_domain_async(
-            domain, url, resolver, cache_manager, whitelist, blacklist, max_concurrent
+            domain,
+            url,
+            resolver,
+            cache_manager,
+            whitelist,
+            blacklist,
+            dns_cache,
+            cache_lock,
+            max_concurrent,
         )
         for domain in domains
     ]

@@ -31,6 +31,7 @@
     "save_unreachable": true,
     "prioritize_lists": true,
     "domain_timeout": 3,
+    "dns_cache_ttl": 3600,
     "domain_cache_validity_days": 7,
     "cache_flush_interval": 300,
     "cache_trie": true,

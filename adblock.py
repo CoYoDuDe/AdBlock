@@ -751,6 +751,8 @@ async def main(config_path: str | None = None, debug: bool = False):
                                     cache_manager,
                                     whitelist,
                                     blacklist,
+                                    DNS_CACHE,
+                                    dns_cache_lock,
                                     max_concurrent_dns,
                                 )
                                 for domain, reachable in results:
@@ -800,6 +802,8 @@ async def main(config_path: str | None = None, debug: bool = False):
                             cache_manager,
                             whitelist,
                             blacklist,
+                            DNS_CACHE,
+                            dns_cache_lock,
                             max_concurrent_dns,
                         )
                         for domain, reachable in results:
