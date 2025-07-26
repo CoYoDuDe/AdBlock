@@ -1,4 +1,4 @@
-"""Hilfsfunktionen zum sicheren Schreiben von Ausgabedateien und Statistiken."""
+"""Hilfsfunktionen, um Ausgabedateien und Statistiken sicher zu schreiben."""
 
 from __future__ import annotations
 
