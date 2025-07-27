@@ -36,7 +36,6 @@ from caching import (
     CacheManager,
     DomainTrie,
     cleanup_temp_files,
-    dns_cache as DNS_CACHE,
 )
 import config
 from config import (
@@ -50,7 +49,6 @@ from config import (
     UNREACHABLE_FILE,
     CONFIG,
     dns_cache_lock,
-    DNS_CACHE,
     logged_messages,
     console_logged_messages,
 )
@@ -751,7 +749,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                                     config.cache_manager,
                                     whitelist,
                                     blacklist,
-                                    cache_manager.dns_cache,
+                                    config.cache_manager.dns_cache,
                                     dns_cache_lock,
                                     max_concurrent_dns,
                                 )
@@ -802,7 +800,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                             config.cache_manager,
                             whitelist,
                             blacklist,
-                            cache_manager.dns_cache,
+                            config.cache_manager.dns_cache,
                             dns_cache_lock,
                             max_concurrent_dns,
                         )
