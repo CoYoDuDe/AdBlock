@@ -19,7 +19,6 @@ from typing import Any, Dict, Optional
 import psutil
 from pybloom_live import ScalableBloomFilter
 
-from collections import OrderedDict
 
 from config import (
     DEFAULT_CONFIG,
@@ -27,11 +26,10 @@ from config import (
     TRIE_CACHE_PATH,
     DB_PATH,
     MAX_DNS_CACHE_SIZE,
+    dns_cache,
 )
 
 logger = logging.getLogger(__name__)
-
-dns_cache: OrderedDict[str, bool] = OrderedDict()
 
 
 class HybridStorage:

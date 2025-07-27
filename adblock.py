@@ -48,6 +48,7 @@ from config import (
     TMP_DIR,
     UNREACHABLE_FILE,
     CONFIG,
+    dns_cache,
     dns_cache_lock,
     logged_messages,
     console_logged_messages,
@@ -64,6 +65,9 @@ from networking import (
 )
 from source_loader import load_hosts_sources, load_whitelist_blacklist
 from writer import safe_save, export_statistics_csv, export_prometheus_metrics
+
+# Referenz halten, um Linting-Fehler zu vermeiden
+_ = dns_cache
 
 
 class SystemMode(Enum):
