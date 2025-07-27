@@ -36,7 +36,6 @@ from caching import (
     CacheManager,
     DomainTrie,
     cleanup_temp_files,
-    dns_cache as DNS_CACHE,
 )
 import config
 from config import (
@@ -49,8 +48,8 @@ from config import (
     TMP_DIR,
     UNREACHABLE_FILE,
     CONFIG,
+    dns_cache,
     dns_cache_lock,
-    DNS_CACHE,
     logged_messages,
     console_logged_messages,
 )
@@ -66,6 +65,9 @@ from networking import (
 )
 from source_loader import load_hosts_sources, load_whitelist_blacklist
 from writer import safe_save, export_statistics_csv, export_prometheus_metrics
+
+# Referenz halten, um Linting-Fehler zu vermeiden
+_ = dns_cache
 
 
 class SystemMode(Enum):
@@ -751,7 +753,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                                     config.cache_manager,
                                     whitelist,
                                     blacklist,
-                                    cache_manager.dns_cache,
+                                    config.cache_manager.dns_cache,
                                     dns_cache_lock,
                                     max_concurrent_dns,
                                 )
@@ -802,7 +804,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                             config.cache_manager,
                             whitelist,
                             blacklist,
-                            cache_manager.dns_cache,
+                            config.cache_manager.dns_cache,
                             dns_cache_lock,
                             max_concurrent_dns,
                         )
