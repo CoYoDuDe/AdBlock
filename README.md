@@ -59,3 +59,6 @@ pytest
 ## 📄 Lizenz
 
 MIT © CoYoDuDe
+
+## Agent Guide
+Für Code-Assistenten siehe [agents.md](./agents.md).

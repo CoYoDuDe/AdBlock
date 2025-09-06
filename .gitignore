@@ -23,3 +23,5 @@ tmp/
 !pytest.ini
 !tests/
 !tests/**
+
+!Makefile
