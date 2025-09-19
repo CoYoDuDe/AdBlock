@@ -5,16 +5,22 @@ from __future__ import annotations
 import asyncio
 from threading import Lock
 import logging
+import os
 import time
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Tuple
 
 import aiodns
 from email.mime.text import MIMEText
 import smtplib
 
-from config import DEFAULT_CONFIG, DNS_CACHE_TTL, MAX_DNS_CACHE_SIZE
+from config import (
+    DEFAULT_CONFIG,
+    DNS_CACHE_TTL,
+    MAX_DNS_CACHE_SIZE,
+    SCRIPT_DIR,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,30 +194,81 @@ def setup_git() -> bool:
 
 
 def upload_to_github(config: dict) -> None:
-    """Commit hosts file and related artifacts to GitHub."""
+    """Commit hosts file und abhängige Artefakte in das Git-Repository."""
 
     repo = config.get("github_repo")
+    if not repo:
+        logger.warning("Kein Git-Repository konfiguriert, überspringe Upload")
+        return
+
     branch = config.get("github_branch", "main")
     git_user = config.get("git_user")
     git_email = config.get("git_email")
 
-    try:
-        subprocess.run(["git", "config", "user.name", git_user], check=True)
-        subprocess.run(["git", "config", "user.email", git_email], check=True)
+    if not os.path.isdir(SCRIPT_DIR):
+        logger.error("Arbeitsverzeichnis existiert nicht: %s", SCRIPT_DIR)
+        return
 
-        files_to_add = [
+    def run_git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
+        """Hilfsfunktion, um Git-Befehle mit korrektem Arbeitsverzeichnis auszuführen."""
+
+        return subprocess.run(
+            ["git", *args],
+            cwd=SCRIPT_DIR,
+            check=check,
+            capture_output=True,
+            text=True,
+        )
+
+    try:
+        if git_user:
+            run_git(["config", "user.name", git_user])
+        if git_email:
+            run_git(["config", "user.email", git_email])
+
+        candidate_files = [
             config.get("hosts_file", "hosts.txt"),
             config.get("dns_config_file", "dnsmasq.conf"),
             "tmp",
         ]
-        subprocess.run(["git", "add", *files_to_add], check=True)
+        files_to_add = [
+            path
+            for path in candidate_files
+            if os.path.exists(os.path.join(SCRIPT_DIR, path))
+        ]
 
-        commit_message = f"Update hosts {datetime.utcnow().isoformat()}"
-        subprocess.run(["git", "commit", "-m", commit_message], check=True)
+        if not files_to_add:
+            logger.warning("Keine Dateien zum Hinzufügen gefunden, breche Upload ab")
+            return
 
-        subprocess.run(["git", "push", repo, f"HEAD:{branch}"], check=True)
+        run_git(["add", "--", *files_to_add])
+
+        status_result = run_git(
+            ["status", "--porcelain", "--", *files_to_add], check=False
+        )
+        if status_result.returncode != 0:
+            logger.error(
+                "Git-Status konnte nicht ermittelt werden: %s",
+                status_result.stderr.strip(),
+            )
+            return
+
+        if not status_result.stdout.strip():
+            logger.info("Keine Änderungen zum Commit, überspringe Upload")
+            return
+
+        commit_message = f"Update hosts {datetime.now(timezone.utc).isoformat()}"
+        run_git(["commit", "-m", commit_message])
+
+        push_result = run_git(["push", repo, f"HEAD:{branch}"], check=False)
+        if push_result.returncode != 0:
+            logger.error("Git-Push fehlgeschlagen: %s", push_result.stderr.strip())
+            return
+
         logger.info("Hosts-Datei erfolgreich auf GitHub hochgeladen")
     except subprocess.CalledProcessError as exc:
-        logger.error("Git-Befehl fehlgeschlagen: %s", exc)
+        logger.error(
+            "Git-Befehl fehlgeschlagen: %s", exc.stderr.strip() if exc.stderr else exc
+        )
     except Exception as exc:  # pragma: no cover - unforeseen errors
         logger.error("Fehler beim Upload zu GitHub: %s", exc)

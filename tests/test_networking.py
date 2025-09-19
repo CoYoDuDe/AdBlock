@@ -1,6 +1,8 @@
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock
+import subprocess
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import networking  # noqa: E402
@@ -36,3 +38,85 @@ def test_send_email_via_smtp(monkeypatch):
     mock_server.starttls.assert_called()
     mock_server.login.assert_called_with("u", "p")
     mock_server.send_message.assert_called()
+
+
+def _completed(args, returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess(
+        args=args, returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def test_upload_to_github_runs_in_script_dir(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, cwd=None, check=True, capture_output=False, text=False):
+        calls.append((cmd, cwd))
+        if cmd[1] == "config":
+            return _completed(cmd)
+        if cmd[1] == "add":
+            return _completed(cmd)
+        if cmd[1] == "status":
+            return _completed(cmd, stdout=" M hosts.txt\n")
+        if cmd[1] == "commit":
+            return _completed(cmd)
+        if cmd[1] == "push":
+            return _completed(cmd)
+        return _completed(cmd)
+
+    fake_subprocess = SimpleNamespace(
+        run=fake_run,
+        CompletedProcess=subprocess.CompletedProcess,
+        CalledProcessError=subprocess.CalledProcessError,
+    )
+    monkeypatch.setattr(networking, "subprocess", fake_subprocess)
+    monkeypatch.setattr(networking.os.path, "isdir", lambda path: True)
+    monkeypatch.setattr(
+        networking.os.path,
+        "exists",
+        lambda path: path.endswith("hosts.txt") or path.endswith("dnsmasq.conf"),
+    )
+
+    config = {
+        "github_repo": "git@github.com:example/repo.git",
+        "github_branch": "main",
+        "git_user": "user",
+        "git_email": "mail@example.com",
+        "hosts_file": "hosts.txt",
+        "dns_config_file": "dnsmasq.conf",
+    }
+
+    networking.upload_to_github(config)
+
+    assert all(cwd == networking.SCRIPT_DIR for _, cwd in calls if cwd is not None)
+    push_calls = [cmd for cmd, _ in calls if cmd[1] == "push"]
+    assert push_calls, "Push-Befehl wurde nicht ausgeführt"
+
+
+def test_upload_to_github_skips_without_changes(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, cwd=None, check=True, capture_output=False, text=False):
+        calls.append(cmd)
+        if cmd[1] == "status":
+            return _completed(cmd, stdout="")
+        return _completed(cmd)
+
+    fake_subprocess = SimpleNamespace(
+        run=fake_run,
+        CompletedProcess=subprocess.CompletedProcess,
+        CalledProcessError=subprocess.CalledProcessError,
+    )
+    monkeypatch.setattr(networking, "subprocess", fake_subprocess)
+    monkeypatch.setattr(networking.os.path, "isdir", lambda path: True)
+    monkeypatch.setattr(networking.os.path, "exists", lambda path: True)
+
+    config = {
+        "github_repo": "git@github.com:example/repo.git",
+        "hosts_file": "hosts.txt",
+        "dns_config_file": "dnsmasq.conf",
+    }
+
+    networking.upload_to_github(config)
+
+    assert any(cmd[1] == "status" for cmd in calls)
+    assert all(cmd[1] != "commit" for cmd in calls)
