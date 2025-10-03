@@ -51,6 +51,11 @@ def test_upload_to_github_runs_in_script_dir(monkeypatch):
 
     def fake_run(cmd, cwd=None, check=True, capture_output=False, text=False):
         calls.append((cmd, cwd))
+        if cmd[1] == "check-ignore":
+            path = cmd[-1]
+            if path == "tmp":
+                return _completed(cmd, returncode=0, stdout="tmp\n")
+            return _completed(cmd, returncode=1)
         if cmd[1] == "config":
             return _completed(cmd)
         if cmd[1] == "add":
@@ -90,6 +95,10 @@ def test_upload_to_github_runs_in_script_dir(monkeypatch):
     assert all(cwd == networking.SCRIPT_DIR for _, cwd in calls if cwd is not None)
     push_calls = [cmd for cmd, _ in calls if cmd[1] == "push"]
     assert push_calls, "Push-Befehl wurde nicht ausgeführt"
+    add_calls = [cmd for cmd, _ in calls if cmd[1] == "add"]
+    assert add_calls, "Add-Befehl wurde nicht ausgeführt"
+    for cmd in add_calls:
+        assert "tmp" not in cmd, "Ignorierter tmp-Pfad wurde hinzugefügt"
 
 
 def test_upload_to_github_skips_without_changes(monkeypatch):
@@ -97,6 +106,8 @@ def test_upload_to_github_skips_without_changes(monkeypatch):
 
     def fake_run(cmd, cwd=None, check=True, capture_output=False, text=False):
         calls.append(cmd)
+        if cmd[1] == "check-ignore":
+            return _completed(cmd, returncode=1)
         if cmd[1] == "status":
             return _completed(cmd, stdout="")
         return _completed(cmd)

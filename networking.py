@@ -231,11 +231,20 @@ def upload_to_github(config: dict) -> None:
             config.get("dns_config_file", "dnsmasq.conf"),
             "tmp",
         ]
-        files_to_add = [
-            path
-            for path in candidate_files
-            if os.path.exists(os.path.join(SCRIPT_DIR, path))
-        ]
+        files_to_add: list[str] = []
+        ignored_files: list[str] = []
+        for path in candidate_files:
+            absolute_path = os.path.join(SCRIPT_DIR, path)
+            if not os.path.exists(absolute_path):
+                continue
+            check_ignore = run_git(["check-ignore", path], check=False)
+            if check_ignore.returncode == 0:
+                ignored_files.append(path)
+                continue
+            files_to_add.append(path)
+
+        for ignored in ignored_files:
+            logger.debug("Überspringe von Git ignorierten Pfad: %s", ignored)
 
         if not files_to_add:
             logger.warning("Keine Dateien zum Hinzufügen gefunden, breche Upload ab")
