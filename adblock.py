@@ -694,6 +694,16 @@ async def main(config_path: str | None = None, debug: bool = False):
                             "unique": unique,
                             "subdomains": subdomains,
                         }
+                        STATISTICS["list_stats"][url] = {
+                            "total": total,
+                            "unique": unique,
+                            "reachable": 0,
+                            "unreachable": 0,
+                            "duplicates": max(total - unique, 0),
+                            "subdomains": subdomains,
+                            "score": 0.0,
+                            "category": "unknown",
+                        }
                     logger.info(f"Verarbeitet {url}: {unique} Domains")
                     memory = psutil.Process().memory_info().rss / (1024 * 1024)
                     logger.debug(f"Speicherverbrauch nach {url}: {memory:.2f} MB")
@@ -730,6 +740,25 @@ async def main(config_path: str | None = None, debug: bool = False):
             UNREACHABLE_FILE, "a", encoding="utf-8"
         ) as f_unreachable:
             for url in processed_urls:
+                stats_entry = STATISTICS["list_stats"].setdefault(
+                    url,
+                    {
+                        "total": url_counts.get(url, {}).get("total", 0),
+                        "unique": url_counts.get(url, {}).get("unique", 0),
+                        "reachable": 0,
+                        "unreachable": 0,
+                        "duplicates": max(
+                            url_counts.get(url, {}).get("total", 0)
+                            - url_counts.get(url, {}).get("unique", 0),
+                            0,
+                        ),
+                        "subdomains": url_counts.get(url, {}).get("subdomains", 0),
+                        "score": 0.0,
+                        "category": "unknown",
+                    },
+                )
+                stats_entry["reachable"] = 0
+                stats_entry["unreachable"] = 0
                 filtered_file = os.path.join(
                     TMP_DIR, f"{sanitize_url_for_tmp(url)}.filtered"
                 )
@@ -765,9 +794,11 @@ async def main(config_path: str | None = None, debug: bool = False):
                                     if reachable:
                                         await f_reachable.write(domain + "\n")
                                         STATISTICS["reachable_domains"] += 1
+                                        stats_entry["reachable"] += 1
                                     else:
                                         await f_unreachable.write(domain + "\n")
                                         STATISTICS["unreachable_domains"] += 1
+                                        stats_entry["unreachable"] += 1
                                 domains = []
                                 memory = psutil.Process().memory_info().rss / (
                                     1024 * 1024
@@ -816,10 +847,12 @@ async def main(config_path: str | None = None, debug: bool = False):
                             if reachable:
                                 await f_reachable.write(domain + "\n")
                                 STATISTICS["reachable_domains"] += 1
+                                stats_entry["reachable"] += 1
                             else:
                                 await f_unreachable.write(domain + "\n")
                                 STATISTICS["unreachable_domains"] += 1
-        evaluate_lists(url_counts, STATISTICS, CONFIG)
+                                stats_entry["unreachable"] += 1
+        evaluate_lists(STATISTICS, CONFIG)
         logger.debug("Listen bewertet")
         sorted_domains = []
         async with aiofiles.open(REACHABLE_FILE, "r", encoding="utf-8") as f:

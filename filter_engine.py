@@ -66,14 +66,20 @@ def categorize_list(url: str) -> str:
         return "unknown"
 
 
-def evaluate_lists(url_counts: Dict[str, Dict], statistics: Dict, config: Dict) -> None:
+def evaluate_lists(statistics: Dict, config: Dict) -> None:
     """Evaluate list statistics and update metrics."""
     try:
-        for url, stats in statistics["list_stats"].items():
-            counts = url_counts.get(url, {"total": 0, "unique": 0, "subdomains": 0})
-            stats["total"] = counts["total"]
-            stats["unique"] = counts["unique"]
-            stats["subdomains"] = counts["subdomains"]
+        list_stats = statistics.get("list_stats", {})
+        for url, stats in list_stats.items():
+            stats.setdefault("total", 0)
+            stats.setdefault("unique", 0)
+            stats.setdefault("subdomains", 0)
+            stats.setdefault("reachable", 0)
+            stats.setdefault("unreachable", 0)
+            duplicates = stats.get("duplicates")
+            if duplicates is None:
+                duplicates = stats["total"] - stats["unique"]
+            stats["duplicates"] = max(duplicates, 0)
             stats["category"] = categorize_list(url)
             if stats["total"] > 0:
                 unique_ratio = stats["unique"] / stats["total"]
