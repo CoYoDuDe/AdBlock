@@ -106,12 +106,16 @@ async def test_dns_entry_async(
 
     async with semaphore:
         record_types = [record_type, "AAAA"] if record_type == "A" else [record_type]
-        for record in record_types:
+        total_records = len(record_types)
+        for record_index, record in enumerate(record_types):
             for attempt in range(max_retries):
                 reachable = await query_with_backoff(domain, record, resolver, attempt)
                 if reachable:
                     return True
-                await asyncio.sleep(retry_delay)
+                has_more_attempts = attempt < max_retries - 1
+                has_more_records = record_index < total_records - 1
+                if has_more_attempts or has_more_records:
+                    await asyncio.sleep(retry_delay)
         return False
 
 
