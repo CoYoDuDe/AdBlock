@@ -430,6 +430,8 @@ class CacheManager:
 
     def save_domain_cache(self) -> None:
         try:
+            if self.domain_cache.use_ram:
+                self.domain_cache.flush_to_disk()
             if (
                 len(self.domain_cache.ram_storage) > self.current_cache_size
                 and self.domain_cache.use_ram
