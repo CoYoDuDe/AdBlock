@@ -26,7 +26,7 @@ def test_ensure_list_stats_entry_initializes_and_updates(monkeypatch):
 
     assert entry["total"] == 10
     assert entry["unique"] == 7
-    assert entry["duplicates"] == 3
+    assert entry["duplicates"] == 1
     assert entry["subdomains"] == 2
     assert entry["reachable"] == 0
     assert entry["unreachable"] == 0
@@ -195,6 +195,7 @@ def test_process_list_cache_reuses_statistics(monkeypatch, tmp_path):
     original_domain_sources = adblock.STATISTICS["domain_sources"].copy()
     adblock.STATISTICS["duplicates"] = 0
     adblock.STATISTICS["cache_hits"] = 0
+    adblock.STATISTICS["domain_sources"] = {}
 
     async def run_test():
         try:
@@ -203,7 +204,9 @@ def test_process_list_cache_reuses_statistics(monkeypatch, tmp_path):
             )
             duplicates_after_first = adblock.STATISTICS["duplicates"]
             assert duplicates_after_first == 1
+            assert result_first[0] == len(domains)
             assert result_first[2] > 0  # subdomain count
+            assert result_first[3] == 1
 
             result_second = await adblock.process_list(
                 url, cache_manager, FakeSession("data")
@@ -219,6 +222,94 @@ def test_process_list_cache_reuses_statistics(monkeypatch, tmp_path):
             adblock.CONFIG.update(original_adblock_config)
             adblock.STATISTICS["duplicates"] = original_duplicates
             adblock.STATISTICS["cache_hits"] = original_cache_hits
+            adblock.STATISTICS["domain_sources"] = original_domain_sources
+
+    asyncio.run(run_test())
+
+
+def test_process_list_updates_total_and_duplicates(monkeypatch, tmp_path):
+    monkeypatch.setattr(adblock, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie_cache.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+
+    os.makedirs(adblock.TMP_DIR, exist_ok=True)
+
+    config_values = config_module.DEFAULT_CONFIG.copy()
+    config_values["use_bloom_filter"] = False
+    config_values["remove_redundant_subdomains"] = True
+    original_config = config_module.CONFIG.copy()
+    original_adblock_config = adblock.CONFIG.copy()
+    config_module.CONFIG.clear()
+    config_module.CONFIG.update(config_values)
+    adblock.CONFIG.clear()
+    adblock.CONFIG.update(config_values)
+    monkeypatch.setattr(adblock.config, "global_mode", adblock.SystemMode.NORMAL)
+
+    monkeypatch.setattr(adblock, "get_system_resources", lambda: (10, 10, 10))
+    monkeypatch.setattr(
+        adblock.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=1_000_000_000),
+    )
+    monkeypatch.setattr(
+        adblock.psutil,
+        "Process",
+        lambda: SimpleNamespace(
+            memory_info=lambda: SimpleNamespace(rss=50 * 1024 * 1024)
+        ),
+    )
+
+    domains = [
+        "example.com",
+        "duplicate.example.com",
+        "duplicate.example.com",
+        "sub.example.com",
+        "unique.com",
+    ]
+
+    def fake_parse_domains(content: str, url: str):
+        for domain in domains:
+            yield domain
+
+    monkeypatch.setattr(adblock, "parse_domains", fake_parse_domains)
+
+    cache_manager = caching.CacheManager(
+        str(tmp_path / "cache.db"), flush_interval=1, config=config_values
+    )
+
+    url = "https://example.com/list.txt"
+    original_duplicates = adblock.STATISTICS.get("duplicates", 0)
+    original_list_stats = adblock.STATISTICS["list_stats"]
+    original_domain_sources = adblock.STATISTICS["domain_sources"].copy()
+    adblock.STATISTICS["duplicates"] = 0
+    adblock.STATISTICS["list_stats"] = defaultdict(adblock.create_default_list_stats_entry)
+    adblock.STATISTICS["domain_sources"] = {}
+
+    async def run_test():
+        try:
+            total, unique, subdomains, duplicates = await adblock.process_list(
+                url, cache_manager, FakeSession("data")
+            )
+            adblock.ensure_list_stats_entry(
+                url,
+                total=total,
+                unique=unique,
+                subdomains=subdomains,
+                duplicates=duplicates,
+            )
+            stats_entry = adblock.STATISTICS["list_stats"][url]
+            assert stats_entry["total"] == len(domains)
+            assert stats_entry["unique"] == unique
+            assert stats_entry["subdomains"] == subdomains
+            assert stats_entry["duplicates"] == duplicates == 1
+        finally:
+            config_module.CONFIG.clear()
+            config_module.CONFIG.update(original_config)
+            adblock.CONFIG.clear()
+            adblock.CONFIG.update(original_adblock_config)
+            adblock.STATISTICS["duplicates"] = original_duplicates
+            adblock.STATISTICS["list_stats"] = original_list_stats
             adblock.STATISTICS["domain_sources"] = original_domain_sources
 
     asyncio.run(run_test())
