@@ -1,5 +1,6 @@
 import asyncio
 import os
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -356,3 +357,39 @@ def test_process_list_retries_on_client_error(monkeypatch):
     assert session.call_count == 3
     assert adblock.STATISTICS["failed_lists"] == original_failed_lists
     assert adblock.STATISTICS["error_message"] == original_error_message
+
+
+def test_restart_dnsmasq_service_failure_triggers_email(monkeypatch):
+    email_calls: list[tuple[str, str, dict]] = []
+
+    def fake_send_email(subject: str, message: str, cfg: dict) -> None:
+        email_calls.append((subject, message, cfg))
+
+    monkeypatch.setattr(adblock, "send_email", fake_send_email)
+
+    def fake_which(command: str) -> str | None:
+        if command == "systemctl":
+            return None
+        if command == "service":
+            return "/usr/sbin/service"
+        return None
+
+    monkeypatch.setattr(adblock.shutil, "which", fake_which)
+
+    def fake_run(cmd, check):
+        if cmd[0] == "service":
+            raise subprocess.CalledProcessError(returncode=1, cmd=cmd)
+        pytest.fail(f"Unerwarteter Befehl aufgerufen: {cmd}")
+
+    monkeypatch.setattr(adblock.subprocess, "run", fake_run)
+    monkeypatch.setattr(adblock.config, "global_mode", adblock.SystemMode.NORMAL, raising=False)
+
+    config_values = {"send_email": True}
+
+    result = adblock.restart_dnsmasq(config_values)
+
+    assert result is False
+    assert email_calls, "Es wurde keine E-Mail-Benachrichtigung ausgelöst"
+    subject, message, cfg = email_calls[-1]
+    assert "DNSMasq-Neustart fehlgeschlagen" in message
+    assert cfg is config_values
