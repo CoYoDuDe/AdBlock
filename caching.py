@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional
 
 import psutil
 from pybloom_live import ScalableBloomFilter
+from urllib.parse import quote, unquote
 
 
 from config import (
@@ -30,6 +31,18 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_tmp_identifier(url: str) -> str:
+    """Kodiert eine URL so, dass sie als Dateiname verwendet werden kann."""
+
+    return quote(url, safe="")
+
+
+def desanitize_tmp_filename(identifier: str) -> str:
+    """Rekonstruiert die ursprüngliche URL aus einem temporären Dateinamen."""
+
+    return unquote(identifier)
 
 
 class HybridStorage:
@@ -401,7 +414,8 @@ def cleanup_temp_files(cache_manager: CacheManager) -> None:
                 continue
 
             if file.endswith(".tmp") or file.endswith(".filtered"):
-                url = file.replace("__", "/").replace("_", "://")
+                sanitized_name, _ = os.path.splitext(file)
+                url = desanitize_tmp_filename(sanitized_name)
                 if url not in valid_urls:
                     os.remove(file_path)
     except Exception as exc:
