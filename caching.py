@@ -351,8 +351,31 @@ class CacheManager:
                 with sqlite3.connect(self.db_path, timeout=30) as conn:
                     c = conn.cursor()
                     c.execute(
-                        "CREATE TABLE IF NOT EXISTS list_cache (url TEXT PRIMARY KEY, md5 TEXT, last_checked TEXT)"
+                        """
+                        CREATE TABLE IF NOT EXISTS list_cache (
+                            url TEXT PRIMARY KEY,
+                            md5 TEXT,
+                            last_checked TEXT,
+                            total_domains INTEGER,
+                            unique_domains INTEGER,
+                            subdomains INTEGER,
+                            duplicates INTEGER
+                        )
+                        """
                     )
+                    existing_columns = {
+                        row[1] for row in c.execute("PRAGMA table_info(list_cache)")
+                    }
+                    for column in (
+                        "total_domains",
+                        "unique_domains",
+                        "subdomains",
+                        "duplicates",
+                    ):
+                        if column not in existing_columns:
+                            c.execute(
+                                f"ALTER TABLE list_cache ADD COLUMN {column} INTEGER"
+                            )
                     conn.commit()
         except Exception as exc:
             logger.warning("DB init failed: %s", exc)
@@ -423,9 +446,28 @@ class CacheManager:
             with self._db_lock:
                 with sqlite3.connect(self.db_path, timeout=30) as conn:
                     c = conn.cursor()
-                    c.execute("SELECT url, md5, last_checked FROM list_cache")
+                    c.execute(
+                        """
+                        SELECT
+                            url,
+                            md5,
+                            last_checked,
+                            total_domains,
+                            unique_domains,
+                            subdomains,
+                            duplicates
+                        FROM list_cache
+                        """
+                    )
                     self.list_cache = {
-                        row[0]: {"md5": row[1], "last_checked": row[2]}
+                        row[0]: {
+                            "md5": row[1],
+                            "last_checked": row[2],
+                            "total_domains": row[3],
+                            "unique_domains": row[4],
+                            "subdomains": row[5],
+                            "duplicates": row[6],
+                        }
                         for row in c.fetchall()
                     }
                     conn.commit()
@@ -440,13 +482,30 @@ class CacheManager:
                 with sqlite3.connect(self.db_path, timeout=30) as conn:
                     c = conn.cursor()
                     c.execute(
-                        "SELECT md5, last_checked FROM list_cache WHERE url = ?",
+                        """
+                        SELECT
+                            md5,
+                            last_checked,
+                            total_domains,
+                            unique_domains,
+                            subdomains,
+                            duplicates
+                        FROM list_cache
+                        WHERE url = ?
+                        """,
                         (url,),
                     )
                     row = c.fetchone()
                     conn.commit()
             if row:
-                entry = {"md5": row[0], "last_checked": row[1]}
+                entry = {
+                    "md5": row[0],
+                    "last_checked": row[1],
+                    "total_domains": row[2],
+                    "unique_domains": row[3],
+                    "subdomains": row[4],
+                    "duplicates": row[5],
+                }
                 self.list_cache[url] = entry
                 return entry
             return None
@@ -455,7 +514,15 @@ class CacheManager:
             return None
 
     def upsert_list_cache(
-        self, url: str, md5: str, *, last_checked: Optional[str] = None
+        self,
+        url: str,
+        md5: str,
+        *,
+        last_checked: Optional[str] = None,
+        total_domains: Optional[int] = None,
+        unique_domains: Optional[int] = None,
+        subdomains: Optional[int] = None,
+        duplicates: Optional[int] = None,
     ) -> None:
         timestamp = last_checked or datetime.now().isoformat()
         try:
@@ -463,11 +530,37 @@ class CacheManager:
                 with sqlite3.connect(self.db_path, timeout=30) as conn:
                     c = conn.cursor()
                     c.execute(
-                        "REPLACE INTO list_cache (url, md5, last_checked) VALUES (?, ?, ?)",
-                        (url, md5, timestamp),
+                        """
+                        REPLACE INTO list_cache (
+                            url,
+                            md5,
+                            last_checked,
+                            total_domains,
+                            unique_domains,
+                            subdomains,
+                            duplicates
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            url,
+                            md5,
+                            timestamp,
+                            total_domains,
+                            unique_domains,
+                            subdomains,
+                            duplicates,
+                        ),
                     )
                     conn.commit()
-            self.list_cache[url] = {"md5": md5, "last_checked": timestamp}
+            self.list_cache[url] = {
+                "md5": md5,
+                "last_checked": timestamp,
+                "total_domains": total_domains,
+                "unique_domains": unique_domains,
+                "subdomains": subdomains,
+                "duplicates": duplicates,
+            }
         except Exception as exc:
             logger.warning(
                 "Fehler beim Aktualisieren des List-Caches für %s: %s", url, exc

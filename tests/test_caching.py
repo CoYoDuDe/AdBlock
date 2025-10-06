@@ -139,3 +139,31 @@ def test_list_cache_upsert_thread_safe(monkeypatch, tmp_path):
     assert set(cache_entries.keys()) == set(urls)
     for target_url, md5_value in zip(urls, md5_values):
         assert cache_entries[target_url]["md5"] == md5_value
+        assert "total_domains" in cache_entries[target_url]
+        assert "unique_domains" in cache_entries[target_url]
+        assert "subdomains" in cache_entries[target_url]
+        assert "duplicates" in cache_entries[target_url]
+
+
+def test_upsert_list_cache_persists_statistics(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+
+    cache_manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
+    url = "https://example.com/list.txt"
+    cache_manager.upsert_list_cache(
+        url,
+        "hash",
+        total_domains=42,
+        unique_domains=30,
+        subdomains=5,
+        duplicates=7,
+    )
+
+    entry = cache_manager.get_list_cache_entry(url)
+    assert entry is not None
+    assert entry["total_domains"] == 42
+    assert entry["unique_domains"] == 30
+    assert entry["subdomains"] == 5
+    assert entry["duplicates"] == 7
