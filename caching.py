@@ -289,9 +289,8 @@ class DomainTrie:
         except KeyError:
             self.storage[self.root_key] = TrieNode()
 
-    def insert(self, domain: str) -> None:
-        if self.bloom_filter and domain in self.bloom_filter:
-            return
+    def insert(self, domain: str) -> bool:
+        possible_duplicate = bool(self.bloom_filter and domain in self.bloom_filter)
         node = self.storage[self.root_key]
         node_key = self.root_key
         parts = domain.split(".")[::-1]
@@ -303,10 +302,20 @@ class DomainTrie:
                 self.storage[new_key] = TrieNode()
             node_key = node.children[part]
             node = self.storage[node_key]
+
+        if node.is_end:
+            # Der Bloom-Filter liefert keine False-Negatives. Sollte ein Duplikat nicht
+            # erkannt worden sein (z. B. nach einem Reset), stellen wir sicher, dass der
+            # Filter synchronisiert bleibt.
+            if self.bloom_filter and not possible_duplicate:
+                self.bloom_filter.add(domain)
+            return False
+
         node.is_end = True
         self.storage[node_key] = node
         if self.bloom_filter:
             self.bloom_filter.add(domain)
+        return True
 
     def has_parent(self, domain: str) -> bool:
         parts = domain.split(".")[::-1]

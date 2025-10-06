@@ -130,7 +130,7 @@ def test_process_list_cache_reuses_statistics(monkeypatch, tmp_path):
                 url, cache_manager, FakeSession("data")
             )
             duplicates_after_first = adblock.STATISTICS["duplicates"]
-            assert duplicates_after_first > 0
+            assert duplicates_after_first == 1
             assert result_first[2] > 0  # subdomain count
 
             result_second = await adblock.process_list(
