@@ -481,11 +481,39 @@ async def process_list(
         temp_file = os.path.join(TMP_DIR, f"{sanitized_url}.tmp")
         filtered_file = os.path.join(TMP_DIR, f"{sanitized_url}.filtered")
         if cached_entry and cached_entry["md5"] == current_md5:
-            logger.info(f"Liste {url} unverändert, verwende Cache")
-            if os.path.exists(filtered_file):
-                async with aiofiles.open(filtered_file, "r", encoding="utf-8") as f:
-                    unique_count = sum(1 for _ in await f.readlines() if _.strip())
-                return unique_count, unique_count, 0
+            cached_stats_available = all(
+                cached_entry.get(field) is not None
+                for field in (
+                    "total_domains",
+                    "unique_domains",
+                    "subdomains",
+                    "duplicates",
+                )
+            )
+            if cached_stats_available:
+                total_domains = int(cached_entry.get("total_domains", 0) or 0)
+                unique_domains = int(cached_entry.get("unique_domains", 0) or 0)
+                subdomain_count = int(cached_entry.get("subdomains", 0) or 0)
+                cached_duplicates = cached_entry.get("duplicates")
+                if cached_duplicates is None:
+                    cached_duplicates = max(total_domains - unique_domains, 0)
+                else:
+                    cached_duplicates = max(int(cached_duplicates), 0)
+                previous_stats = STATISTICS["domain_sources"].get(url, {})
+                previous_duplicates = previous_stats.get("duplicates", 0)
+                delta_duplicates = max(cached_duplicates - previous_duplicates, 0)
+                if delta_duplicates:
+                    STATISTICS["duplicates"] += delta_duplicates
+                STATISTICS["domain_sources"].setdefault(url, {})
+                STATISTICS["domain_sources"][url]["duplicates"] = cached_duplicates
+                STATISTICS["domain_sources"][url]["subdomains"] = subdomain_count
+                STATISTICS["cache_hits"] += 1
+                logger.info(f"Liste {url} unverändert, verwende Cache")
+                return total_domains, unique_domains, subdomain_count
+            logger.debug(
+                "Cache-Eintrag für %s ohne vollständige Statistik, führe Verarbeitung erneut durch",
+                url,
+            )
         trie = DomainTrie(url, cache_manager.config)
         domain_count = 0
         unique_count = 0
@@ -563,9 +591,19 @@ async def process_list(
                     "Finaler Batch gespeichert, Speicher nach GC: "
                     f"{psutil.virtual_memory().available/(1024*1024):.2f} MB"
                 )
-        cache_manager.upsert_list_cache(url, current_md5)
+        cache_manager.upsert_list_cache(
+            url,
+            current_md5,
+            total_domains=domain_count,
+            unique_domains=unique_count,
+            subdomains=subdomain_count,
+            duplicates=duplicate_count,
+        )
         trie.close()
         STATISTICS["duplicates"] += duplicate_count
+        STATISTICS["domain_sources"].setdefault(url, {})
+        STATISTICS["domain_sources"][url]["duplicates"] = duplicate_count
+        STATISTICS["domain_sources"][url]["subdomains"] = subdomain_count
         gc.collect()
         logger.info(
             f"Extrahierte {domain_count} Domains aus {url}, {unique_count} einzigartig, {duplicate_count} Duplikate"
