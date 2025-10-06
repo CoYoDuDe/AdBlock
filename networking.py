@@ -85,8 +85,14 @@ async def select_best_dns_server(
 
 
 async def test_dns_entry_async(
-    domain: str, resolver, record_type: str = "A", max_concurrent: int = 5
+    domain: str,
+    resolver,
+    record_type: str = "A",
+    semaphore: asyncio.Semaphore | None = None,
 ) -> bool:
+    if semaphore is None:
+        raise ValueError("A semaphore instance is required")
+
     async def query_with_backoff(
         domain: str, record: str, resolver, attempt: int
     ) -> bool:
@@ -98,7 +104,7 @@ async def test_dns_entry_async(
         except Exception:
             return False
 
-    async with asyncio.Semaphore(max_concurrent):
+    async with semaphore:
         record_types = [record_type, "AAAA"] if record_type == "A" else [record_type]
         for record in record_types:
             for attempt in range(DEFAULT_CONFIG["max_retries"]):
@@ -119,6 +125,7 @@ async def test_single_domain_async(
     dns_cache: dict | None = None,
     cache_lock: Lock | None = None,
     max_concurrent: int = 5,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> bool:
     if domain in whitelist:
         return False
@@ -141,8 +148,11 @@ async def test_single_domain_async(
             info = dns_cache.get(domain)
             if info and time.time() - info["timestamp"] < DNS_CACHE_TTL:
                 return info["reachable"]
+    semaphore = semaphore or asyncio.Semaphore(max_concurrent)
     reachable = await test_dns_entry_async(
-        domain, resolver, max_concurrent=max_concurrent
+        domain,
+        resolver,
+        semaphore=semaphore,
     )
     cache_manager.save_dns_cache(domain, reachable)
     cache_manager.save_domain(domain, reachable, url)
@@ -166,6 +176,7 @@ async def test_domain_batch(
     cache_lock: Lock | None = None,
     max_concurrent: int = 5,
 ):
+    semaphore = asyncio.Semaphore(max_concurrent)
     tasks = [
         test_single_domain_async(
             domain,
@@ -177,6 +188,7 @@ async def test_domain_batch(
             dns_cache,
             cache_lock,
             max_concurrent,
+            semaphore,
         )
         for domain in domains
     ]

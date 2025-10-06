@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock
@@ -131,3 +132,57 @@ def test_upload_to_github_skips_without_changes(monkeypatch):
 
     assert any(cmd[1] == "status" for cmd in calls)
     assert all(cmd[1] != "commit" for cmd in calls)
+
+
+def test_domain_batch_limits_concurrency():
+    class CountingResolver:
+        def __init__(self):
+            self.current_calls = 0
+            self.max_parallel_calls = 0
+
+        async def query(self, domain, record):
+            self.current_calls += 1
+            try:
+                self.max_parallel_calls = max(
+                    self.max_parallel_calls, self.current_calls
+                )
+                await asyncio.sleep(0)
+                return [domain, record]
+            finally:
+                self.current_calls -= 1
+
+    class DummyCacheManager:
+        def get_dns_cache(self, domain):
+            return None
+
+        def load_domain_cache(self):
+            return {}
+
+        def save_dns_cache(self, domain, reachable):
+            pass
+
+        def save_domain(self, domain, reachable, url):
+            pass
+
+    resolver = CountingResolver()
+    cache_manager = DummyCacheManager()
+    domains = [f"example{i}.com" for i in range(6)]
+    max_concurrent = 3
+
+    results = asyncio.run(
+        networking.test_domain_batch(
+            domains,
+            "https://example.com",
+            resolver,
+            cache_manager,
+            set(),
+            set(),
+            dns_cache=None,
+            cache_lock=None,
+            max_concurrent=max_concurrent,
+        )
+    )
+
+    assert len(results) == len(domains)
+    assert resolver.max_parallel_calls <= max_concurrent
+    assert resolver.max_parallel_calls > 1
