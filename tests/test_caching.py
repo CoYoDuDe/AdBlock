@@ -1,6 +1,7 @@
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import caching  # noqa: E402
@@ -38,6 +39,28 @@ def test_cache_manager_dns_cache(monkeypatch, tmp_path):
     cm.save_domain("a.com", True, "url")
     cache = cm.load_domain_cache()
     assert "a.com" in cache
+
+
+def test_cache_manager_persists_domain_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+
+    monkeypatch.setattr(
+        caching.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=0),
+    )
+
+    first_manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
+    first_manager.save_domain("persistent.com", True, "https://source")
+    first_manager.domain_cache.close()
+
+    second_manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
+    cached_entry = second_manager.domain_cache["persistent.com"]
+
+    assert cached_entry["reachable"] is True
+    assert cached_entry["source"] == "https://source"
 
 
 def test_cleanup_temp_files_keeps_valid_filtered_file(monkeypatch, tmp_path):
