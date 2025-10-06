@@ -86,7 +86,30 @@ class HybridStorage:
             self.reset_if_corrupt()
         self.ram_threshold = self.calculate_threshold()
         self._use_ram = False
+        self._dirty = False
         self.use_ram = self.should_use_ram()
+
+    @property
+    def is_dirty(self) -> bool:
+        return getattr(self, "_dirty", False)
+
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+
+    def _sync_if_dirty(self) -> bool:
+        if not self.is_dirty or self.db is None:
+            return False
+        try:
+            self.db.sync()
+        except Exception as exc:
+            logger.warning(
+                "Fehler beim Synchronisieren der HybridStorage-DB %s: %s",
+                self.db_path,
+                exc,
+            )
+            return False
+        self._dirty = False
+        return True
 
     def calculate_threshold(self) -> int:
         try:
@@ -120,16 +143,18 @@ class HybridStorage:
             logger.warning("RAM check failed: %s", exc)
             return True
 
-    def persist_ram_to_disk(self) -> None:
+    def persist_ram_to_disk(self) -> bool:
         """Persistiert den aktuellen RAM-Inhalt sicher auf die Festplatte."""
 
         if self.db is None:
-            return
+            return False
 
+        wrote_to_disk = False
         if self.ram_storage:
             try:
                 for key, value in list(self.ram_storage.items()):
                     self.db[key] = value
+                    wrote_to_disk = True
             except Exception as exc:
                 logger.warning(
                     "Fehler beim Persistieren der RAM-Daten nach %s: %s",
@@ -138,14 +163,10 @@ class HybridStorage:
                 )
                 raise
 
-        try:
-            self.db.sync()
-        except Exception as exc:
-            logger.warning(
-                "Fehler beim Synchronisieren der HybridStorage-DB %s: %s",
-                self.db_path,
-                exc,
-            )
+        if wrote_to_disk:
+            self._mark_dirty()
+
+        return self._sync_if_dirty()
 
     @property
     def use_ram(self) -> bool:
@@ -163,8 +184,8 @@ class HybridStorage:
             self.ram_storage.clear()
         self._use_ram = bool_value
 
-    def flush_to_disk(self) -> None:
-        self.persist_ram_to_disk()
+    def flush_to_disk(self) -> bool:
+        return self.persist_ram_to_disk()
 
     def reset_if_corrupt(self) -> None:
         try:
@@ -202,6 +223,7 @@ class HybridStorage:
                     )
             self.db = shelve.open(self.db_path, protocol=3, writeback=False)
             self.ram_storage.clear()
+            self._dirty = False
         except Exception as exc:
             logger.error("Fehler beim Zurücksetzen der DB: %s", exc)
             raise
@@ -212,7 +234,7 @@ class HybridStorage:
             self.ram_storage[key] = value
         else:
             self.db[key] = value
-            self.db.sync()
+            self._mark_dirty()
 
     def _load_from_disk_if_present(self, key: str) -> bool:
         """Lädt einen vorhandenen Schlüssel von der Festplatte in den RAM."""
@@ -270,7 +292,7 @@ class HybridStorage:
             del self.ram_storage[key]
         else:
             del self.db[key]
-            self.db.sync()
+            self._mark_dirty()
 
     def items(self):
         if not self.use_ram:
@@ -324,9 +346,11 @@ class HybridStorage:
             self.ram_storage.clear()
         else:
             self.db.clear()
-            self.db.sync()
+            self._mark_dirty()
+            self._sync_if_dirty()
 
     def close(self) -> None:
+        self.flush_to_disk()
         try:
             self.db.close()
         except Exception as exc:
@@ -565,9 +589,14 @@ class CacheManager:
     def save_domain_cache(self) -> bool:
         flush_performed = False
         try:
+            needs_flush = False
             if self.domain_cache.use_ram:
-                self.domain_cache.flush_to_disk()
-                flush_performed = True
+                needs_flush = True
+            elif self.domain_cache.is_dirty:
+                needs_flush = True
+
+            if needs_flush:
+                flush_performed = self.domain_cache.flush_to_disk() or flush_performed
             if (
                 len(self.domain_cache.ram_storage) > self.current_cache_size
                 and self.domain_cache.use_ram
