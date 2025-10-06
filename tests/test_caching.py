@@ -1,5 +1,5 @@
 import sys
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -47,9 +47,7 @@ def test_cleanup_temp_files_keeps_valid_filtered_file(monkeypatch, tmp_path):
 
     cache_manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
     url = "https://example.com/list.txt"
-    cache_manager.save_list_cache(
-        {url: {"md5": "dummy", "last_checked": datetime.now().isoformat()}}
-    )
+    cache_manager.upsert_list_cache(url, "dummy")
     sanitized = caching.sanitize_tmp_identifier(url)
     filtered_path = tmp_path / f"{sanitized}.filtered"
     filtered_path.write_text("example.com\n", encoding="utf-8")
@@ -57,3 +55,25 @@ def test_cleanup_temp_files_keeps_valid_filtered_file(monkeypatch, tmp_path):
     caching.cleanup_temp_files(cache_manager)
 
     assert filtered_path.exists()
+
+
+def test_list_cache_upsert_thread_safe(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+
+    cache_manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
+    urls = [f"https://example.com/list{i}.txt" for i in range(5)]
+    md5_values = [f"md5-{i}" for i in range(5)]
+
+    def worker(target_url: str, md5_value: str) -> None:
+        cache_manager.upsert_list_cache(target_url, md5_value)
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        for target_url, md5_value in zip(urls, md5_values):
+            executor.submit(worker, target_url, md5_value)
+
+    cache_entries = cache_manager.load_list_cache()
+    assert set(cache_entries.keys()) == set(urls)
+    for target_url, md5_value in zip(urls, md5_values):
+        assert cache_entries[target_url]["md5"] == md5_value
