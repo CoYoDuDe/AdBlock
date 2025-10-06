@@ -98,6 +98,49 @@ def test_cache_manager_persists_domain_cache(monkeypatch, tmp_path):
     assert cached_entry["source"] == "https://source"
 
 
+def test_save_domain_cache_flushes_ram_storage_to_disk(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+
+    available_memory = 512 * 1024 * 1024
+    monkeypatch.setattr(
+        caching.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=available_memory),
+    )
+
+    config_module.CONFIG.update(
+        {"resource_thresholds": config_module.DEFAULT_CONFIG["resource_thresholds"]}
+    )
+
+    manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
+
+    assert manager.domain_cache.use_ram is True
+
+    domains = {
+        "ram-persist-1.com": (True, "https://source"),
+        "ram-persist-2.net": (False, "https://source"),
+    }
+
+    for domain, (reachable, source_url) in domains.items():
+        manager.save_domain(domain, reachable, source_url)
+
+    manager.save_domain_cache()
+    manager.domain_cache.close()
+
+    second_manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
+
+    try:
+        assert second_manager.domain_cache.use_ram is True
+        for domain, (reachable, source_url) in domains.items():
+            persisted_entry = second_manager.domain_cache.db[domain]
+            assert persisted_entry["reachable"] is reachable
+            assert persisted_entry["source"] == source_url
+    finally:
+        second_manager.domain_cache.close()
+
+
 def test_cleanup_temp_files_keeps_valid_filtered_file(monkeypatch, tmp_path):
     monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
     monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
