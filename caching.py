@@ -495,6 +495,21 @@ class CacheManager:
         self._flush_count = 0
         self.init_database()
 
+    def _persist_ram_cache(self) -> bool:
+        """Persistiert den RAM-Anteil des Domain-Caches auf die Festplatte."""
+
+        if not self.domain_cache.use_ram:
+            return False
+
+        if not self.domain_cache.ram_storage:
+            return False
+
+        try:
+            return self.domain_cache.persist_ram_to_disk()
+        except Exception as exc:
+            logger.warning("Fehler beim Persistieren des RAM-Domain-Caches: %s", exc)
+            return False
+
     def calculate_dynamic_cache_size(self) -> int:
         try:
             free_memory = psutil.virtual_memory().available
@@ -589,13 +604,9 @@ class CacheManager:
     def save_domain_cache(self) -> bool:
         flush_performed = False
         try:
-            needs_flush = False
             if self.domain_cache.use_ram:
-                needs_flush = True
+                flush_performed = self._persist_ram_cache() or flush_performed
             elif self.domain_cache.is_dirty:
-                needs_flush = True
-
-            if needs_flush:
                 flush_performed = self.domain_cache.flush_to_disk() or flush_performed
             if (
                 len(self.domain_cache.ram_storage) > self.current_cache_size
@@ -614,6 +625,7 @@ class CacheManager:
         if flush_performed:
             self._flush_count += 1
         return flush_performed
+
     def save_domain(self, domain: str, reachable: bool, source_url: str) -> None:
         try:
             self.domain_cache[domain] = {
@@ -625,11 +637,18 @@ class CacheManager:
                 len(self.domain_cache.ram_storage) > self.current_cache_size
                 and self.domain_cache.use_ram
             ):
+                persisted = self._persist_ram_cache()
+                if not persisted:
+                    logger.warning(
+                        "Persistierung vor RAM-Verdrängung fehlgeschlagen, Eintrag bleibt im RAM"
+                    )
+                    return
+
                 oldest_domain = min(
                     self.domain_cache.ram_storage,
                     key=lambda k: self.domain_cache.ram_storage[k]["checked_at"],
                 )
-                del self.domain_cache[oldest_domain]
+                self.domain_cache.ram_storage.pop(oldest_domain, None)
         except Exception as exc:
             logger.warning("Fehler beim Speichern der Domain %s: %s", domain, exc)
 
