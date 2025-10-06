@@ -59,6 +59,37 @@ def test_domain_trie_flush_preserves_parent_detection(monkeypatch, tmp_path):
     trie.close()
 
 
+def test_domain_trie_insert_returns_status_and_prevents_duplicates(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching.HybridStorage, "should_use_ram", lambda self: True)
+
+    config_module.CONFIG.update(
+        {
+            "use_bloom_filter": True,
+            "bloom_filter_capacity": 10,
+            "bloom_filter_error_rate": 0.001,
+        }
+    )
+
+    trie = caching.DomainTrie("http://example.com", config_module.CONFIG)
+    try:
+        assert trie.insert("example.com") is True
+        root_after_first = trie.storage[trie.root_key]
+        stored_keys_after_first = set(root_after_first.children.values())
+
+        assert trie.insert("example.com") is False
+        root_after_second = trie.storage[trie.root_key]
+        assert set(root_after_second.children.values()) == stored_keys_after_first
+
+        assert trie.insert("sub.example.com") is True
+        assert trie.insert("sub.example.com") is False
+    finally:
+        trie.close()
+
+
 def test_domain_trie_persists_parent_nodes_on_disk(monkeypatch, tmp_path):
     monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
     monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))

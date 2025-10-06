@@ -519,7 +519,6 @@ async def process_list(
         unique_count = 0
         subdomain_count = 0
         duplicate_count = 0
-        seen_domains = set()
         batch = []
         async with aiofiles.open(
             temp_file, "w", encoding="utf-8"
@@ -542,11 +541,9 @@ async def process_list(
                         console=True,
                     )
                     await asyncio.sleep(5)
-                if domain in seen_domains:
+                if not trie.insert(domain):
                     duplicate_count += 1
                     continue
-                seen_domains.add(domain)
-                trie.insert(domain)
                 batch.append(domain)
                 domain_count += 1
                 if len(batch) >= batch_size:
