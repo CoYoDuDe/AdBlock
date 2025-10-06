@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import adblock  # noqa: E402
 import caching  # noqa: E402
 import config as config_module  # noqa: E402
+import monitoring  # noqa: E402
 
 
 def test_ensure_list_stats_entry_initializes_and_updates(monkeypatch):
@@ -64,6 +65,65 @@ class FakeSession:
 
     def get(self, url: str, timeout: int):
         return FakeResponse(self._content)
+
+
+def test_get_system_resources_uses_non_blocking_cpu_percent(monkeypatch):
+    intervals = []
+
+    def fake_cpu_percent(interval=None):
+        intervals.append(interval)
+        return 25.0
+
+    monkeypatch.setattr(monitoring, "_RESOURCE_CACHE", None)
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", fake_cpu_percent)
+    monkeypatch.setattr(monitoring.psutil, "cpu_count", lambda logical=True: 8)
+    monkeypatch.setattr(
+        monitoring.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=2_000_000_000),
+    )
+
+    result = monitoring.get_system_resources()
+
+    assert intervals, "psutil.cpu_percent wurde nicht aufgerufen"
+    assert intervals[0] in (None, 0)
+    assert isinstance(result, tuple)
+    assert len(result) == 3
+
+
+def test_get_system_resources_caches_recent_values(monkeypatch):
+    times = [1000.0, 1000.01]
+
+    def fake_monotonic():
+        return times.pop(0)
+
+    call_counter = {"count": 0}
+
+    def fake_cpu_percent(interval=None):
+        call_counter["count"] += 1
+        return 30.0
+
+    monkeypatch.setattr(monitoring, "_RESOURCE_CACHE", None)
+    monkeypatch.setattr(monitoring.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", fake_cpu_percent)
+    monkeypatch.setattr(monitoring.psutil, "cpu_count", lambda logical=True: 4)
+    monkeypatch.setattr(
+        monitoring.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=1_000_000_000),
+    )
+
+    first = monitoring.get_system_resources()
+
+    def fail_cpu_percent(interval=None):
+        raise AssertionError("psutil.cpu_percent sollte nicht erneut aufgerufen werden")
+
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", fail_cpu_percent)
+
+    second = monitoring.get_system_resources()
+
+    assert first == second
+    assert call_counter["count"] == 1
 
 
 def test_process_list_cache_reuses_statistics(monkeypatch, tmp_path):

@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
-from typing import Tuple
+from typing import Optional, Tuple
 
 import aiodns
 import psutil
 
 logger = logging.getLogger(__name__)
+
+_RESOURCE_CACHE_TTL_SECONDS = 0.05
+_RESOURCE_CACHE: Optional[Tuple[float, Tuple[int, int, int]]] = None
 
 
 async def check_network_latency(config: dict) -> float:
@@ -27,17 +31,28 @@ async def check_network_latency(config: dict) -> float:
 
 
 def get_system_resources() -> Tuple[int, int, int]:
+    global _RESOURCE_CACHE
+
+    now = time.monotonic()
+    if _RESOURCE_CACHE is not None:
+        cached_at, cached_values = _RESOURCE_CACHE
+        if now - cached_at <= _RESOURCE_CACHE_TTL_SECONDS:
+            return cached_values
+
     try:
-        cpu_load = psutil.cpu_percent(interval=0.1) / 100
+        cpu_load = psutil.cpu_percent(interval=None) / 100
         cpu_cores = psutil.cpu_count(logical=True) or 1
         free_memory = psutil.virtual_memory().available
         max_jobs = max(1, int(cpu_cores / (cpu_load + 0.1)) // 2)
         batch_size = max(10, min(50, int(free_memory / (500 * 1024))))
         max_concurrent_dns = max(5, min(20, int(free_memory / (1024 * 1024))))
-        return max_jobs, batch_size, max_concurrent_dns
+        values = (max_jobs, batch_size, max_concurrent_dns)
     except Exception as exc:
         logger.error("Fehler bei Ressourcenermittlung: %s", exc)
-        return 1, 5, 5
+        values = (1, 5, 5)
+
+    _RESOURCE_CACHE = (now, values)
+    return values
 
 
 async def monitor_resources(cache_manager, config: dict) -> None:
