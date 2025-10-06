@@ -200,9 +200,7 @@ def test_cache_manager_disk_flush_bundles_sync(monkeypatch, tmp_path):
         assert flush_result is True
         assert len(sync_calls) == 1
         assert cache_manager.domain_cache.is_dirty is False
-        assert (
-            cache_manager.domain_cache["batched.example"]["reachable"] is True
-        )
+        assert cache_manager.domain_cache["batched.example"]["reachable"] is True
 
         second_flush = cache_manager.save_domain_cache()
 
@@ -217,9 +215,7 @@ def test_cache_manager_disk_flush_bundles_sync(monkeypatch, tmp_path):
 
         assert third_flush is True
         assert len(sync_calls) == 2
-        assert (
-            cache_manager.domain_cache["batched-2.example"]["reachable"] is False
-        )
+        assert cache_manager.domain_cache["batched-2.example"]["reachable"] is False
     finally:
         cache_manager.domain_cache.close()
 
@@ -265,6 +261,52 @@ def test_save_domain_cache_flushes_ram_storage_to_disk(monkeypatch, tmp_path):
             assert persisted_entry["source"] == source_url
     finally:
         second_manager.domain_cache.close()
+
+
+def test_ram_eviction_persists_oldest_entry_to_disk(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+    monkeypatch.setattr(caching.HybridStorage, "should_use_ram", lambda self: True)
+    monkeypatch.setattr(
+        caching.CacheManager, "calculate_dynamic_cache_size", lambda self: 2
+    )
+
+    manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
+
+    manager_closed = False
+    reloaded_manager = None
+
+    try:
+        assert manager.domain_cache.use_ram is True
+
+        source_url = "https://source"
+        domains = [
+            ("evicted.example", True),
+            ("second.example", False),
+            ("third.example", True),
+        ]
+
+        for domain, reachable in domains:
+            manager.save_domain(domain, reachable, source_url)
+
+        assert "evicted.example" not in manager.domain_cache.ram_storage
+
+        manager.domain_cache.close()
+        manager_closed = True
+
+        reloaded_manager = caching.CacheManager(
+            str(tmp_path / "cache.db"), flush_interval=1
+        )
+
+        restored_entry = reloaded_manager.domain_cache["evicted.example"]
+        assert restored_entry["reachable"] is True
+        assert restored_entry["source"] == source_url
+    finally:
+        if not manager_closed:
+            manager.domain_cache.close()
+        if reloaded_manager is not None:
+            reloaded_manager.domain_cache.close()
 
 
 def test_cache_flush_statistics_synced_with_manager(monkeypatch, tmp_path):
@@ -365,7 +407,9 @@ def test_upsert_list_cache_persists_statistics(monkeypatch, tmp_path):
 
 
 def test_hybrid_storage_reset_removes_all_shelve_artifacts(monkeypatch, tmp_path):
-    monkeypatch.setattr(caching.psutil, "virtual_memory", lambda: SimpleNamespace(available=0))
+    monkeypatch.setattr(
+        caching.psutil, "virtual_memory", lambda: SimpleNamespace(available=0)
+    )
     db_path = tmp_path / "hybrid_cache"
     storage = caching.HybridStorage(str(db_path))
 
