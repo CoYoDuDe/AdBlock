@@ -5,17 +5,33 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import caching  # noqa: E402
+import config as config_module  # noqa: E402
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def reset_config():
+    original = config_module.CONFIG.copy()
+    config_module.CONFIG.clear()
+    yield
+    config_module.CONFIG.clear()
+    config_module.CONFIG.update(original)
 
 
 def test_domain_trie_flush_preserves_parent_detection(monkeypatch, tmp_path):
     monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
     monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
-    config = caching.DEFAULT_CONFIG.copy()
-    config["use_bloom_filter"] = False
-    config["remove_redundant_subdomains"] = True
-    monkeypatch.setattr(caching, "DEFAULT_CONFIG", config)
+    config_values = caching.DEFAULT_CONFIG.copy()
+    config_values["use_bloom_filter"] = False
+    config_values["remove_redundant_subdomains"] = True
+    config_module.CONFIG.update(
+        {
+            "use_bloom_filter": False,
+            "remove_redundant_subdomains": True,
+        }
+    )
 
-    trie = caching.DomainTrie("http://example.com")
+    trie = caching.DomainTrie("http://example.com", config_module.CONFIG)
     first_batch = ["example.com"]
     for domain in first_batch:
         trie.insert(domain)
@@ -30,7 +46,7 @@ def test_domain_trie_flush_preserves_parent_detection(monkeypatch, tmp_path):
     processed_domains = []
 
     for domain in second_batch:
-        if config["remove_redundant_subdomains"] and trie.has_parent(domain):
+        if config_values["remove_redundant_subdomains"] and trie.has_parent(domain):
             continue
         trie.insert(domain)
         processed_domains.append(domain)
@@ -87,7 +103,11 @@ def test_cleanup_temp_files_keeps_valid_filtered_file(monkeypatch, tmp_path):
     monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
     monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
 
-    cache_manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
+    config_module.CONFIG.update({"domain_cache_validity_days": 30})
+
+    cache_manager = caching.CacheManager(
+        str(tmp_path / "cache.db"), flush_interval=1, config=config_module.CONFIG
+    )
     url = "https://example.com/list.txt"
     cache_manager.upsert_list_cache(url, "dummy")
     sanitized = caching.sanitize_tmp_identifier(url)

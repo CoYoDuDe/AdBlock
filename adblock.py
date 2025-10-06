@@ -486,7 +486,7 @@ async def process_list(
                 async with aiofiles.open(filtered_file, "r", encoding="utf-8") as f:
                     unique_count = sum(1 for _ in await f.readlines() if _.strip())
                 return unique_count, unique_count, 0
-        trie = DomainTrie(url)
+        trie = DomainTrie(url, cache_manager.config)
         domain_count = 0
         unique_count = 0
         subdomain_count = 0
@@ -633,7 +633,9 @@ async def main(config_path: str | None = None, debug: bool = False):
         logger.debug("Temporäres Verzeichnis erstellt")
 
         logger.debug("Initialisiere CacheManager...")
-        config.cache_manager = CacheManager(DB_PATH, CONFIG["cache_flush_interval"])
+        config.cache_manager = CacheManager(
+            DB_PATH, CONFIG["cache_flush_interval"], config=CONFIG
+        )
         if config.cache_manager is None:
             raise ValueError("CacheManager konnte nicht initialisiert werden")
         logger.debug("CacheManager initialisiert")

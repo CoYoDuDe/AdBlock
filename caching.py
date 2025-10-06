@@ -15,7 +15,8 @@ import time
 import zlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from copy import deepcopy
+from typing import Any, Dict, Mapping, Optional
 
 import psutil
 from pybloom_live import ScalableBloomFilter
@@ -23,6 +24,7 @@ from urllib.parse import quote, unquote
 
 
 from config import (
+    CONFIG,
     DEFAULT_CONFIG,
     TMP_DIR,
     TRIE_CACHE_PATH,
@@ -32,6 +34,24 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _deep_merge(base: Dict[str, Any], updates: Mapping[str, Any]) -> Dict[str, Any]:
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            base[key] = _deep_merge(base[key], value)
+        else:
+            base[key] = deepcopy(value)
+    return base
+
+
+def _merge_config(overrides: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    merged = deepcopy(DEFAULT_CONFIG)
+    if CONFIG:
+        _deep_merge(merged, CONFIG)
+    if overrides:
+        _deep_merge(merged, overrides)
+    return merged
 
 
 def sanitize_tmp_identifier(url: str) -> str:
@@ -85,8 +105,9 @@ class HybridStorage:
     def should_use_ram(self) -> bool:
         try:
             free_memory = psutil.virtual_memory().available
+            config_values = _merge_config()
             emergency_threshold = (
-                DEFAULT_CONFIG["resource_thresholds"]["emergency_memory_mb"]
+                config_values["resource_thresholds"]["emergency_memory_mb"]
                 * 1024
                 * 1024
             )
@@ -211,15 +232,16 @@ class TrieNode:
 class DomainTrie:
     """Trie für schnelle Domain-Abfragen."""
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, config: Optional[Mapping[str, Any]] = None):
         url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()
         db_path = os.path.join(TMP_DIR, f"trie_cache_{url_hash}.db")
         self.storage = HybridStorage(db_path)
         self.root_key = "root"
-        if DEFAULT_CONFIG.get("use_bloom_filter"):
+        self.config = _merge_config(config)
+        if self.config.get("use_bloom_filter"):
             self.bloom_filter = ScalableBloomFilter(
-                initial_capacity=DEFAULT_CONFIG["bloom_filter_capacity"],
-                error_rate=DEFAULT_CONFIG["bloom_filter_error_rate"],
+                initial_capacity=self.config["bloom_filter_capacity"],
+                error_rate=self.config["bloom_filter_error_rate"],
             )
         else:
             self.bloom_filter = None
@@ -294,9 +316,15 @@ def load_trie_cache(all_domains_hash: str, url: str) -> Optional[DomainTrie]:
 class CacheManager:
     """Verwaltet Domain- und Listen-Caches."""
 
-    def __init__(self, db_path: str, flush_interval: int):
+    def __init__(
+        self,
+        db_path: str,
+        flush_interval: int,
+        config: Optional[Mapping[str, Any]] = None,
+    ):
         self.db_path = db_path
         self.flush_interval = flush_interval
+        self.config = _merge_config(config)
         os.makedirs(TMP_DIR, exist_ok=True)
         self.domain_cache = HybridStorage(os.path.join(TMP_DIR, "domain_cache.db"))
         self.list_cache: Dict[str, Dict] = {}
@@ -452,8 +480,9 @@ def cleanup_temp_files(cache_manager: CacheManager) -> None:
     try:
         list_cache = cache_manager.load_list_cache()
         valid_urls = set(list_cache.keys())
+        active_config = getattr(cache_manager, "config", _merge_config())
         expiry = datetime.now() - timedelta(
-            days=DEFAULT_CONFIG["domain_cache_validity_days"]
+            days=active_config["domain_cache_validity_days"]
         )
 
         valid_trie_basenames = {
