@@ -5,6 +5,10 @@ from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 
+import aiohttp
+import backoff
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import adblock  # noqa: E402
@@ -65,6 +69,14 @@ class FakeSession:
 
     def get(self, url: str, timeout: int):
         return FakeResponse(self._content)
+
+
+class DummyCacheManager:
+    def get_list_cache_entry(self, url):
+        return None
+
+    def upsert_list_cache(self, *args, **kwargs):
+        return None
 
 
 def test_get_system_resources_uses_non_blocking_cpu_percent(monkeypatch):
@@ -210,3 +222,46 @@ def test_process_list_cache_reuses_statistics(monkeypatch, tmp_path):
             adblock.STATISTICS["domain_sources"] = original_domain_sources
 
     asyncio.run(run_test())
+
+
+def test_process_list_retries_on_client_error(monkeypatch):
+    original_failed_lists = adblock.STATISTICS.get("failed_lists", 0)
+    original_error_message = adblock.STATISTICS.get("error_message", "")
+
+    class FailingResponse:
+        async def __aenter__(self):
+            raise aiohttp.ClientError("Boom")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FailingSession:
+        def __init__(self):
+            self.call_count = 0
+
+        def get(self, url, timeout):
+            self.call_count += 1
+            return FailingResponse()
+
+    async def immediate_sleep(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(backoff._async.asyncio, "sleep", immediate_sleep)
+    monkeypatch.setitem(
+        adblock.CONFIG,
+        "http_timeout",
+        adblock.CONFIG.get("http_timeout", 1),
+    )
+
+    session = FailingSession()
+    cache_manager = DummyCacheManager()
+
+    async def run_test():
+        with pytest.raises(aiohttp.ClientError):
+            await adblock.process_list("https://example.com/list.txt", cache_manager, session)
+
+    asyncio.run(run_test())
+
+    assert session.call_count == 3
+    assert adblock.STATISTICS["failed_lists"] == original_failed_lists
+    assert adblock.STATISTICS["error_message"] == original_error_message
