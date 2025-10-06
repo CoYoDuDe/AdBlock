@@ -53,6 +53,15 @@ def _completed(args, returncode=0, stdout="", stderr=""):
     )
 
 
+def test_setup_git_handles_missing_binary(monkeypatch):
+    def raise_file_not_found(*args, **kwargs):
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr(networking.subprocess, "run", raise_file_not_found)
+
+    assert networking.setup_git() is False
+
+
 def test_upload_to_github_runs_in_script_dir(monkeypatch):
     calls = []
 
