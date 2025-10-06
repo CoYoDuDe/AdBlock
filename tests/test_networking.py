@@ -236,7 +236,45 @@ def test_test_dns_entry_async_respects_config(monkeypatch):
 
     assert result is False
     assert resolver.calls == config["max_retries"]
-    assert sleep_calls == [config["retry_delay"]] * config["max_retries"]
+    expected_sleeps = max(config["max_retries"] - 1, 0)
+    assert sleep_calls == [config["retry_delay"]] * expected_sleeps
+
+
+def test_test_dns_entry_async_skips_final_sleep(monkeypatch):
+    class FailingResolver:
+        def __init__(self):
+            self.calls = 0
+
+        async def query(self, domain, record):
+            self.calls += 1
+            raise networking.aiodns.error.DNSError("fail")
+
+    sleep_calls = []
+
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(networking.asyncio, "sleep", fake_sleep)
+    resolver = FailingResolver()
+    config = {"max_retries": 2, "retry_delay": 0.01}
+
+    async def run_test():
+        semaphore = asyncio.Semaphore(1)
+        return await networking.test_dns_entry_async(
+            "example.com",
+            resolver,
+            record_type="A",
+            semaphore=semaphore,
+            config=config,
+        )
+
+    result = asyncio.run(run_test())
+
+    assert result is False
+    total_attempts = config["max_retries"] * 2  # A und AAAA
+    assert resolver.calls == total_attempts
+    assert len(sleep_calls) == total_attempts - 1
+    assert all(delay == config["retry_delay"] for delay in sleep_calls)
 
 
 def test_test_single_domain_async_respects_domain_cache_validity():
