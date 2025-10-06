@@ -222,6 +222,9 @@ def setup_git() -> bool:
     except subprocess.CalledProcessError as exc:
         logger.warning("git not available: %s", exc)
         return False
+    except FileNotFoundError as exc:
+        logger.warning("git not available: %s", exc)
+        return False
 
 
 def upload_to_github(config: dict) -> None:
