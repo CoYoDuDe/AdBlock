@@ -26,7 +26,6 @@ import shutil
 from argparse import ArgumentParser
 import argparse
 from collections import defaultdict
-from datetime import datetime
 import socket
 import asyncio
 import backoff
@@ -477,11 +476,11 @@ async def process_list(
         sample_lines = "\n".join(content.splitlines()[:5])
         logger.debug(f"Erste Zeilen von {url}:\n{sample_lines}")
         current_md5 = calculate_md5(content)
-        list_cache = cache_manager.load_list_cache()
+        cached_entry = cache_manager.get_list_cache_entry(url)
         sanitized_url = sanitize_url_for_tmp(url)
         temp_file = os.path.join(TMP_DIR, f"{sanitized_url}.tmp")
         filtered_file = os.path.join(TMP_DIR, f"{sanitized_url}.filtered")
-        if url in list_cache and list_cache[url]["md5"] == current_md5:
+        if cached_entry and cached_entry["md5"] == current_md5:
             logger.info(f"Liste {url} unverändert, verwende Cache")
             if os.path.exists(filtered_file):
                 async with aiofiles.open(filtered_file, "r", encoding="utf-8") as f:
@@ -564,11 +563,7 @@ async def process_list(
                     "Finaler Batch gespeichert, Speicher nach GC: "
                     f"{psutil.virtual_memory().available/(1024*1024):.2f} MB"
                 )
-        list_cache[url] = {
-            "md5": current_md5,
-            "last_checked": datetime.now().isoformat(),
-        }
-        cache_manager.save_list_cache(list_cache)
+        cache_manager.upsert_list_cache(url, current_md5)
         trie.close()
         STATISTICS["duplicates"] += duplicate_count
         gc.collect()

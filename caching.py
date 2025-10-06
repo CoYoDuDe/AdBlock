@@ -10,6 +10,7 @@ import os
 import pickle
 import shelve
 import sqlite3
+import threading
 import time
 import zlib
 from dataclasses import dataclass
@@ -267,6 +268,7 @@ class CacheManager:
         self.dns_cache = dns_cache
         self.last_flush = time.time()
         self.current_cache_size = self.calculate_dynamic_cache_size()
+        self._db_lock = threading.Lock()
         self.init_database()
 
     def calculate_dynamic_cache_size(self) -> int:
@@ -282,13 +284,13 @@ class CacheManager:
 
     def init_database(self) -> None:
         try:
-            conn = sqlite3.connect(self.db_path, timeout=30)
-            c = conn.cursor()
-            c.execute(
-                "CREATE TABLE IF NOT EXISTS list_cache (url TEXT PRIMARY KEY, md5 TEXT, last_checked TEXT)"
-            )
-            conn.commit()
-            conn.close()
+            with self._db_lock:
+                with sqlite3.connect(self.db_path, timeout=30) as conn:
+                    c = conn.cursor()
+                    c.execute(
+                        "CREATE TABLE IF NOT EXISTS list_cache (url TEXT PRIMARY KEY, md5 TEXT, last_checked TEXT)"
+                    )
+                    conn.commit()
         except Exception as exc:
             logger.warning("DB init failed: %s", exc)
 
@@ -355,32 +357,58 @@ class CacheManager:
 
     def load_list_cache(self) -> Dict[str, Dict]:
         try:
-            conn = sqlite3.connect(self.db_path, timeout=30)
-            c = conn.cursor()
-            c.execute("SELECT url, md5, last_checked FROM list_cache")
-            self.list_cache = {
-                row[0]: {"md5": row[1], "last_checked": row[2]} for row in c.fetchall()
-            }
-            conn.close()
+            with self._db_lock:
+                with sqlite3.connect(self.db_path, timeout=30) as conn:
+                    c = conn.cursor()
+                    c.execute("SELECT url, md5, last_checked FROM list_cache")
+                    self.list_cache = {
+                        row[0]: {"md5": row[1], "last_checked": row[2]}
+                        for row in c.fetchall()
+                    }
+                    conn.commit()
             return self.list_cache
         except Exception as exc:
             logger.warning("Fehler beim Zugriff auf List-Cache: %s", exc)
             return {}
 
-    def save_list_cache(self, cache: Dict[str, Dict]) -> None:
+    def get_list_cache_entry(self, url: str) -> Optional[Dict[str, str]]:
         try:
-            conn = sqlite3.connect(self.db_path, timeout=30)
-            c = conn.cursor()
-            c.execute("DELETE FROM list_cache")
-            for url, data in cache.items():
-                c.execute(
-                    "INSERT INTO list_cache (url, md5, last_checked) VALUES (?, ?, ?)",
-                    (url, data["md5"], data["last_checked"]),
-                )
-            conn.commit()
-            conn.close()
+            with self._db_lock:
+                with sqlite3.connect(self.db_path, timeout=30) as conn:
+                    c = conn.cursor()
+                    c.execute(
+                        "SELECT md5, last_checked FROM list_cache WHERE url = ?",
+                        (url,),
+                    )
+                    row = c.fetchone()
+                    conn.commit()
+            if row:
+                entry = {"md5": row[0], "last_checked": row[1]}
+                self.list_cache[url] = entry
+                return entry
+            return None
         except Exception as exc:
-            logger.warning("Fehler beim Speichern des List-Caches: %s", exc)
+            logger.warning("Fehler beim Lesen des List-Caches für %s: %s", url, exc)
+            return None
+
+    def upsert_list_cache(
+        self, url: str, md5: str, *, last_checked: Optional[str] = None
+    ) -> None:
+        timestamp = last_checked or datetime.now().isoformat()
+        try:
+            with self._db_lock:
+                with sqlite3.connect(self.db_path, timeout=30) as conn:
+                    c = conn.cursor()
+                    c.execute(
+                        "REPLACE INTO list_cache (url, md5, last_checked) VALUES (?, ?, ?)",
+                        (url, md5, timestamp),
+                    )
+                    conn.commit()
+            self.list_cache[url] = {"md5": md5, "last_checked": timestamp}
+        except Exception as exc:
+            logger.warning(
+                "Fehler beim Aktualisieren des List-Caches für %s: %s", url, exc
+            )
 
 
 def cleanup_temp_files(cache_manager: CacheManager) -> None:
