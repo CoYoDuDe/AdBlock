@@ -52,13 +52,17 @@ class HybridStorage:
     def __init__(self, db_path: str):
         logger.debug("Initializing HybridStorage with db_path: %s", db_path)
         self.db_path = db_path
-        if os.path.exists(db_path):
-            try:
-                os.remove(db_path)
-            except Exception as exc:
-                logger.warning("Fehler beim Löschen von %s: %s", db_path, exc)
-        self.db = shelve.open(db_path, protocol=3, writeback=False)
+        self.db = None
         self.ram_storage: Dict[str, Any] = {}
+        try:
+            self.db = shelve.open(db_path, protocol=3, writeback=False)
+        except Exception as exc:
+            logger.warning(
+                "Fehler beim Öffnen der HybridStorage-DB %s: %s. Versuche Reset.",
+                db_path,
+                exc,
+            )
+            self.reset_if_corrupt()
         self.ram_threshold = self.calculate_threshold()
         self.use_ram = self.should_use_ram()
 
@@ -101,7 +105,15 @@ class HybridStorage:
 
     def reset_if_corrupt(self) -> None:
         try:
-            self.db.close()
+            if getattr(self, "db", None) is not None:
+                try:
+                    self.db.close()
+                except Exception as exc:
+                    logger.warning(
+                        "Fehler beim Schließen der beschädigten DB %s: %s",
+                        self.db_path,
+                        exc,
+                    )
             if os.path.exists(self.db_path):
                 os.remove(self.db_path)
             self.db = shelve.open(self.db_path, protocol=3, writeback=False)
