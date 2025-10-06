@@ -167,3 +167,38 @@ def test_upsert_list_cache_persists_statistics(monkeypatch, tmp_path):
     assert entry["unique_domains"] == 30
     assert entry["subdomains"] == 5
     assert entry["duplicates"] == 7
+
+
+def test_hybrid_storage_reset_removes_all_shelve_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching.psutil, "virtual_memory", lambda: SimpleNamespace(available=0))
+    db_path = tmp_path / "hybrid_cache"
+    storage = caching.HybridStorage(str(db_path))
+
+    try:
+        if storage.db is not None:
+            storage.db.close()
+    finally:
+        storage.db = None
+
+    sentinel = b"corrupt"
+    suffixes = ("", ".db", ".dat", ".bak", ".dir")
+    for suffix in suffixes:
+        artifact = Path(f"{db_path}{suffix}")
+        artifact.write_bytes(sentinel)
+
+    storage.reset_if_corrupt()
+    storage.use_ram = False
+    storage["reinitialized"] = True
+
+    assert storage.db is not None
+    assert storage["reinitialized"] is True
+
+    for suffix in suffixes:
+        artifact = Path(f"{db_path}{suffix}")
+        if artifact.exists():
+            assert artifact.read_bytes() != sentinel
+        else:
+            assert not artifact.exists()
+
+    if storage.db is not None:
+        storage.db.close()

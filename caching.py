@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import shutil
 import pickle
 import shelve
 import sqlite3
@@ -159,8 +160,29 @@ class HybridStorage:
                         self.db_path,
                         exc,
                     )
-            if os.path.exists(self.db_path):
-                os.remove(self.db_path)
+                finally:
+                    self.db = None
+            for suffix in ("", ".db", ".dat", ".bak", ".dir"):
+                candidate = f"{self.db_path}{suffix}"
+                try:
+                    os.remove(candidate)
+                except FileNotFoundError:
+                    continue
+                except IsADirectoryError:
+                    try:
+                        shutil.rmtree(candidate)
+                    except Exception as removal_exc:
+                        logger.warning(
+                            "Fehler beim Entfernen des Shelve-Verzeichnisses %s: %s",
+                            candidate,
+                            removal_exc,
+                        )
+                except Exception as removal_exc:
+                    logger.warning(
+                        "Fehler beim Entfernen der Shelve-Datei %s: %s",
+                        candidate,
+                        removal_exc,
+                    )
             self.db = shelve.open(self.db_path, protocol=3, writeback=False)
             self.ram_storage.clear()
         except Exception as exc:
