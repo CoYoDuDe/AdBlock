@@ -413,7 +413,7 @@ def initialize_directories_and_files():
         raise
 
 
-def restart_dnsmasq(config: dict) -> bool:
+def restart_dnsmasq(config_values: dict) -> bool:
     """Restart the DNSMasq service if possible."""
     systemctl_available = shutil.which("systemctl") is not None
     service_available = shutil.which("service") is not None
@@ -437,7 +437,7 @@ def restart_dnsmasq(config: dict) -> bool:
                 send_email(
                     "Fehler im AdBlock-Skript",
                     f"DNSMasq-Neustart fehlgeschlagen: {exc}",
-                    config,
+                    config_values,
                 )
             return False
 
