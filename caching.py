@@ -282,6 +282,7 @@ class DomainTrie:
             if part not in node.children:
                 new_key = f"{node_key}:{part}:{i}"
                 node.children[part] = new_key
+                self.storage[node_key] = node
                 self.storage[new_key] = TrieNode()
             node_key = node.children[part]
             node = self.storage[node_key]

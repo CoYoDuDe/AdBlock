@@ -58,6 +58,28 @@ def test_domain_trie_flush_preserves_parent_detection(monkeypatch, tmp_path):
     trie.close()
 
 
+def test_domain_trie_persists_parent_nodes_on_disk(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching.HybridStorage, "should_use_ram", lambda self: False)
+
+    config_module.CONFIG.update({"use_bloom_filter": False})
+
+    trie = caching.DomainTrie("http://example.com", config_module.CONFIG)
+    assert trie.storage.use_ram is False
+
+    trie.insert("example.com")
+    trie.flush()
+    trie.close()
+
+    reloaded_trie = caching.DomainTrie("http://example.com", config_module.CONFIG)
+    try:
+        assert reloaded_trie.storage.use_ram is False
+        assert reloaded_trie.has_parent("sub.example.com") is True
+    finally:
+        reloaded_trie.close()
+
+
 def test_cache_manager_dns_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
     monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
