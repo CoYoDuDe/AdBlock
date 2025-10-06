@@ -468,6 +468,7 @@ class CacheManager:
         self.last_flush = time.time()
         self.current_cache_size = self.calculate_dynamic_cache_size()
         self._db_lock = threading.Lock()
+        self._flush_count = 0
         self.init_database()
 
     def calculate_dynamic_cache_size(self) -> int:
@@ -557,10 +558,16 @@ class CacheManager:
         if len(self.dns_cache) > MAX_DNS_CACHE_SIZE:
             self.dns_cache.popitem(last=False)
 
-    def save_domain_cache(self) -> None:
+    @property
+    def flush_count(self) -> int:
+        return self._flush_count
+
+    def save_domain_cache(self) -> bool:
+        flush_performed = False
         try:
             if self.domain_cache.use_ram:
                 self.domain_cache.flush_to_disk()
+                flush_performed = True
             if (
                 len(self.domain_cache.ram_storage) > self.current_cache_size
                 and self.domain_cache.use_ram
@@ -574,7 +581,10 @@ class CacheManager:
                 )
         except Exception as exc:
             logger.warning("Fehler beim Speichern des Domain-Caches: %s", exc)
-
+            return False
+        if flush_performed:
+            self._flush_count += 1
+        return flush_performed
     def save_domain(self, domain: str, reachable: bool, source_url: str) -> None:
         try:
             self.domain_cache[domain] = {

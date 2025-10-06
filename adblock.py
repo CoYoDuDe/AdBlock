@@ -190,6 +190,14 @@ def ensure_list_stats_entry(
     return entry
 
 
+def sync_cache_flush_statistics(cache_manager: CacheManager | None) -> None:
+    """Synchronisiert den Cache-Flush-Zähler mit den globalen Statistiken."""
+
+    if cache_manager is None:
+        return
+    STATISTICS["cache_flushes"] = cache_manager.flush_count
+
+
 def load_config(config_path: str | None = None):
     if config_path is None:
         config_path = os.path.join(SCRIPT_DIR, "config.json")
@@ -973,6 +981,7 @@ async def main(config_path: str | None = None, debug: bool = False):
             is_json=True,
         )
         if config.global_mode != SystemMode.EMERGENCY:
+            sync_cache_flush_statistics(config.cache_manager)
             export_statistics_csv(TMP_DIR, STATISTICS, logger)
             if CONFIG["export_prometheus"]:
                 cache_size = 0
@@ -990,6 +999,7 @@ async def main(config_path: str | None = None, debug: bool = False):
             if STATISTICS["list_recommendations"]
             else "Keine Empfehlungen"
         )
+        sync_cache_flush_statistics(config.cache_manager)
         summary = f"""
 AdBlock-Skript Zusammenfassung (Laufzeit: {time.time() - start_time:.2f}s):
 +-----------------------+-----------------+
@@ -1041,7 +1051,10 @@ Empfehlungen:
                 logger.debug("resource_monitor_task erfolgreich abgebrochen")
         if config.cache_manager:
             async with cache_flush_lock:
-                config.cache_manager.save_domain_cache()
+                flush_performed = config.cache_manager.save_domain_cache()
+                if flush_performed:
+                    logger.debug("Finaler Cache-Flush erfolgreich ausgeführt")
+                sync_cache_flush_statistics(config.cache_manager)
 
 
 def cli_main(cli_args: list[str] | None = None) -> None:

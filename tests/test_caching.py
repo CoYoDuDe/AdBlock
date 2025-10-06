@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import adblock  # noqa: E402
 import caching  # noqa: E402
 import config as config_module  # noqa: E402
 import pytest  # noqa: E402
@@ -211,6 +212,32 @@ def test_save_domain_cache_flushes_ram_storage_to_disk(monkeypatch, tmp_path):
             assert persisted_entry["source"] == source_url
     finally:
         second_manager.domain_cache.close()
+
+
+def test_cache_flush_statistics_synced_with_manager(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+    monkeypatch.setattr(caching.HybridStorage, "should_use_ram", lambda self: True)
+
+    manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
+
+    try:
+        assert manager.flush_count == 0
+
+        manager.save_domain("flush-stats.example", True, "https://source")
+        flush_successful = manager.save_domain_cache()
+
+        assert flush_successful is True
+        assert manager.flush_count > 0
+
+        adblock.STATISTICS["cache_flushes"] = 0
+        adblock.sync_cache_flush_statistics(manager)
+
+        assert adblock.STATISTICS["cache_flushes"] == manager.flush_count
+        assert adblock.STATISTICS["cache_flushes"] > 0
+    finally:
+        manager.domain_cache.close()
 
 
 def test_cleanup_temp_files_keeps_valid_filtered_file(monkeypatch, tmp_path):
