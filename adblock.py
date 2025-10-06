@@ -144,6 +144,18 @@ STATISTICS = {
 logger = logging.getLogger(__name__)
 
 
+def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Führt zwei Dictionaries rekursiv zusammen."""
+
+    merged: Dict[str, Any] = dict(base)
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def sanitize_url_for_tmp(url: str) -> str:
     """Gibt einen sicheren Dateinamen für die zwischengespeicherte URL zurück."""
 
@@ -183,8 +195,7 @@ def load_config(config_path: str | None = None):
         config_path = os.path.join(SCRIPT_DIR, "config.json")
     logger.debug(f"Versuche, Konfigurationsdatei zu laden: {config_path}")
     try:
-        CONFIG.clear()
-        CONFIG.update(DEFAULT_CONFIG)
+        custom_config: Dict[str, Any] = {}
         if not os.path.exists(config_path):
             logger.warning(
                 f"Konfigurationsdatei {config_path} nicht gefunden, erstelle Standardkonfiguration"
@@ -196,17 +207,18 @@ def load_config(config_path: str | None = None):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     custom_config = json.load(f)
-                    CONFIG.update(custom_config)
             except json.JSONDecodeError as e:
                 logger.error(
                     f"Fehler beim Parsen von config.json: {e}. Verwende Standardkonfiguration."
                 )
-                CONFIG.update(DEFAULT_CONFIG)
+                custom_config = {}
             except Exception as e:
                 logger.error(
                     f"Fehler beim Laden von config.json: {e}. Verwende Standardkonfiguration."
                 )
-                CONFIG.update(DEFAULT_CONFIG)
+                custom_config = {}
+        CONFIG.clear()
+        CONFIG.update(deep_merge_dicts(DEFAULT_CONFIG, custom_config))
         for key in [
             "log_file",
             "hosts_ip",
@@ -294,7 +306,7 @@ def load_config(config_path: str | None = None):
             f"Kritischer Fehler in load_config: {e}. Verwende Standardkonfiguration."
         )
         CONFIG.clear()
-        CONFIG.update(DEFAULT_CONFIG)
+        CONFIG.update(deep_merge_dicts(DEFAULT_CONFIG, {}))
 
 
 def setup_logging():
