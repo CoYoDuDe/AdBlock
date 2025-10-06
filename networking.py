@@ -15,12 +15,7 @@ import aiodns
 from email.mime.text import MIMEText
 import smtplib
 
-from config import (
-    DEFAULT_CONFIG,
-    DNS_CACHE_TTL,
-    MAX_DNS_CACHE_SIZE,
-    SCRIPT_DIR,
-)
+from config import CONFIG, DEFAULT_CONFIG, MAX_DNS_CACHE_SIZE, SCRIPT_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +84,7 @@ async def test_dns_entry_async(
     resolver,
     record_type: str = "A",
     semaphore: asyncio.Semaphore | None = None,
+    config: dict | None = None,
 ) -> bool:
     if semaphore is None:
         raise ValueError("A semaphore instance is required")
@@ -104,14 +100,18 @@ async def test_dns_entry_async(
         except Exception:
             return False
 
+    active_config = config or CONFIG or DEFAULT_CONFIG
+    max_retries = active_config.get("max_retries", DEFAULT_CONFIG["max_retries"])
+    retry_delay = active_config.get("retry_delay", DEFAULT_CONFIG["retry_delay"])
+
     async with semaphore:
         record_types = [record_type, "AAAA"] if record_type == "A" else [record_type]
         for record in record_types:
-            for attempt in range(DEFAULT_CONFIG["max_retries"]):
+            for attempt in range(max_retries):
                 reachable = await query_with_backoff(domain, record, resolver, attempt)
                 if reachable:
                     return True
-                await asyncio.sleep(DEFAULT_CONFIG["retry_delay"])
+                await asyncio.sleep(retry_delay)
         return False
 
 
@@ -126,11 +126,18 @@ async def test_single_domain_async(
     cache_lock: Lock | None = None,
     max_concurrent: int = 5,
     semaphore: asyncio.Semaphore | None = None,
+    config: dict | None = None,
 ) -> bool:
     if domain in whitelist:
         return False
     if domain in blacklist:
         return True
+    active_config = config or CONFIG or DEFAULT_CONFIG
+    domain_cache_validity = active_config.get(
+        "domain_cache_validity_days",
+        DEFAULT_CONFIG["domain_cache_validity_days"],
+    )
+    dns_cache_ttl = active_config.get("dns_cache_ttl", DEFAULT_CONFIG["dns_cache_ttl"])
     cached_dns = cache_manager.get_dns_cache(domain)
     if cached_dns is not None:
         return cached_dns
@@ -138,21 +145,20 @@ async def test_single_domain_async(
     if domain in cache:
         entry = cache[domain]
         last_checked = datetime.fromisoformat(entry["checked_at"])
-        if datetime.now() - last_checked < timedelta(
-            days=DEFAULT_CONFIG["domain_cache_validity_days"]
-        ):
+        if datetime.now() - last_checked < timedelta(days=domain_cache_validity):
             return entry["reachable"]
 
     if dns_cache is not None and cache_lock is not None:
         with cache_lock:
             info = dns_cache.get(domain)
-            if info and time.time() - info["timestamp"] < DNS_CACHE_TTL:
+            if info and time.time() - info["timestamp"] < dns_cache_ttl:
                 return info["reachable"]
     semaphore = semaphore or asyncio.Semaphore(max_concurrent)
     reachable = await test_dns_entry_async(
         domain,
         resolver,
         semaphore=semaphore,
+        config=active_config,
     )
     cache_manager.save_dns_cache(domain, reachable)
     cache_manager.save_domain(domain, reachable, url)
@@ -175,6 +181,7 @@ async def test_domain_batch(
     dns_cache: dict | None = None,
     cache_lock: Lock | None = None,
     max_concurrent: int = 5,
+    config: dict | None = None,
 ):
     semaphore = asyncio.Semaphore(max_concurrent)
     tasks = [
@@ -189,6 +196,7 @@ async def test_domain_batch(
             cache_lock,
             max_concurrent,
             semaphore,
+            config,
         )
         for domain in domains
     ]

@@ -838,6 +838,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                                     DNS_CACHE,
                                     dns_cache_lock,
                                     max_concurrent_dns,
+                                    CONFIG,
                                 )
                                 for domain, reachable in results:
                                     if not isinstance(reachable, bool):
@@ -891,6 +892,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                             DNS_CACHE,
                             dns_cache_lock,
                             max_concurrent_dns,
+                            CONFIG,
                         )
                         for domain, reachable in results:
                             if not isinstance(reachable, bool):
