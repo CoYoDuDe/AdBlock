@@ -1,3 +1,4 @@
+import shelve
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -169,6 +170,58 @@ def test_cache_manager_persists_domain_cache(monkeypatch, tmp_path):
 
     assert cached_entry["reachable"] is True
     assert cached_entry["source"] == "https://source"
+
+
+def test_cache_manager_disk_flush_bundles_sync(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+    monkeypatch.setattr(caching.HybridStorage, "should_use_ram", lambda self: False)
+
+    sync_calls = []
+    original_sync = shelve.DbfilenameShelf.sync
+
+    def sync_spy(self):
+        sync_calls.append(time.time())
+        return original_sync(self)
+
+    monkeypatch.setattr(shelve.DbfilenameShelf, "sync", sync_spy)
+
+    cache_manager = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
+
+    try:
+        cache_manager.save_domain("batched.example", True, "https://source")
+
+        assert len(sync_calls) == 0
+        assert cache_manager.domain_cache.is_dirty is True
+
+        flush_result = cache_manager.save_domain_cache()
+
+        assert flush_result is True
+        assert len(sync_calls) == 1
+        assert cache_manager.domain_cache.is_dirty is False
+        assert (
+            cache_manager.domain_cache["batched.example"]["reachable"] is True
+        )
+
+        second_flush = cache_manager.save_domain_cache()
+
+        assert second_flush is False
+        assert len(sync_calls) == 1
+
+        cache_manager.save_domain("batched-2.example", False, "https://source")
+
+        assert cache_manager.domain_cache.is_dirty is True
+
+        third_flush = cache_manager.save_domain_cache()
+
+        assert third_flush is True
+        assert len(sync_calls) == 2
+        assert (
+            cache_manager.domain_cache["batched-2.example"]["reachable"] is False
+        )
+    finally:
+        cache_manager.domain_cache.close()
 
 
 def test_save_domain_cache_flushes_ram_storage_to_disk(monkeypatch, tmp_path):
@@ -359,6 +412,50 @@ def test_hybrid_storage_total_items_counts_unique_entries(tmp_path):
         storage["ram-only.example"] = {"value": 4}
 
         assert storage.total_items() == 3
+    finally:
+        storage.close()
+
+
+def test_hybrid_storage_disk_sync_batched(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching.HybridStorage, "should_use_ram", lambda self: False)
+
+    sync_calls = []
+    original_sync = shelve.DbfilenameShelf.sync
+
+    def sync_spy(self):
+        sync_calls.append(time.time())
+        return original_sync(self)
+
+    monkeypatch.setattr(shelve.DbfilenameShelf, "sync", sync_spy)
+
+    storage = caching.HybridStorage(str(tmp_path / "hybrid_cache_sync"))
+
+    try:
+        storage["persist-me"] = {"value": 1}
+        storage["second"] = {"value": 2}
+
+        assert len(sync_calls) == 0
+
+        del storage["persist-me"]
+
+        assert len(sync_calls) == 0
+
+        flush_performed = storage.flush_to_disk()
+
+        assert flush_performed is True
+        assert len(sync_calls) == 1
+        assert "persist-me" not in storage.db
+        assert storage.db["second"]["value"] == 2
+
+        storage["third"] = {"value": 3}
+
+        assert len(sync_calls) == 1
+
+        second_flush = storage.flush_to_disk()
+
+        assert second_flush is True
+        assert len(sync_calls) == 2
+        assert storage.db["third"]["value"] == 3
     finally:
         storage.close()
 
