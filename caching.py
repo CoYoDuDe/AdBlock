@@ -85,6 +85,7 @@ class HybridStorage:
             )
             self.reset_if_corrupt()
         self.ram_threshold = self.calculate_threshold()
+        self._use_ram = False
         self.use_ram = self.should_use_ram()
 
     def calculate_threshold(self) -> int:
@@ -125,7 +126,7 @@ class HybridStorage:
         if self.db is None:
             return
 
-        if self.use_ram:
+        if self.ram_storage:
             try:
                 for key, value in list(self.ram_storage.items()):
                     self.db[key] = value
@@ -145,6 +146,22 @@ class HybridStorage:
                 self.db_path,
                 exc,
             )
+
+    @property
+    def use_ram(self) -> bool:
+        return getattr(self, "_use_ram", False)
+
+    @use_ram.setter
+    def use_ram(self, value: bool) -> None:
+        previous = getattr(self, "_use_ram", None)
+        bool_value = bool(value)
+        if previous is None:
+            self._use_ram = bool_value
+            return
+        if previous and not bool_value:
+            self.persist_ram_to_disk()
+            self.ram_storage.clear()
+        self._use_ram = bool_value
 
     def flush_to_disk(self) -> None:
         self.persist_ram_to_disk()

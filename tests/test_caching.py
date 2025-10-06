@@ -267,3 +267,34 @@ def test_hybrid_storage_reset_removes_all_shelve_artifacts(monkeypatch, tmp_path
 
     if storage.db is not None:
         storage.db.close()
+
+
+def test_hybrid_storage_switch_to_disk_keeps_entries(monkeypatch, tmp_path):
+    available_memory = 512 * 1024 * 1024
+    monkeypatch.setattr(
+        caching.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=available_memory),
+    )
+
+    storage = caching.HybridStorage(str(tmp_path / "hybrid_cache"))
+
+    try:
+        assert storage.use_ram is True
+
+        entries = {
+            "domain-a.com": {"reachable": True, "source": "https://example/a"},
+            "domain-b.net": {"reachable": False, "source": "https://example/b"},
+        }
+
+        for key, value in entries.items():
+            storage[key] = value
+
+        storage.use_ram = False
+
+        for key, value in entries.items():
+            assert storage[key] == value
+
+        assert storage.ram_storage == {}
+    finally:
+        storage.close()
