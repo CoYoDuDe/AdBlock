@@ -17,7 +17,7 @@ import zlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from copy import deepcopy
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, MutableMapping, Optional, TypedDict
 
 import psutil
 from pybloom_live import ScalableBloomFilter
@@ -353,6 +353,11 @@ def load_trie_cache(all_domains_hash: str, url: str) -> Optional[DomainTrie]:
         return None
 
 
+class DnsCacheEntry(TypedDict):
+    reachable: bool
+    timestamp: float
+
+
 class CacheManager:
     """Verwaltet Domain- und Listen-Caches."""
 
@@ -368,7 +373,7 @@ class CacheManager:
         os.makedirs(TMP_DIR, exist_ok=True)
         self.domain_cache = HybridStorage(os.path.join(TMP_DIR, "domain_cache.db"))
         self.list_cache: Dict[str, Dict] = {}
-        self.dns_cache = dns_cache
+        self.dns_cache: MutableMapping[str, DnsCacheEntry | bool] = dns_cache
         self.last_flush = time.time()
         self.current_cache_size = self.calculate_dynamic_cache_size()
         self._db_lock = threading.Lock()
@@ -434,14 +439,29 @@ class CacheManager:
     def load_domain_cache(self):
         return self.domain_cache
 
-    def get_dns_cache(self, domain: str) -> Optional[bool]:
-        if domain in self.dns_cache:
-            self.dns_cache.move_to_end(domain)
-            return self.dns_cache[domain]
-        return None
+    def get_dns_cache(self, domain: str) -> Optional[DnsCacheEntry]:
+        if domain not in self.dns_cache:
+            return None
+
+        ttl = self.config.get("dns_cache_ttl", DEFAULT_CONFIG["dns_cache_ttl"])
+        raw_entry = self.dns_cache[domain]
+        if isinstance(raw_entry, bool):
+            entry: DnsCacheEntry = {"reachable": raw_entry, "timestamp": time.time()}
+            self.dns_cache[domain] = entry
+        else:
+            entry = raw_entry
+
+        timestamp = entry.get("timestamp")
+        if ttl > 0 and (timestamp is None or time.time() - timestamp > ttl):
+            self.dns_cache.pop(domain, None)
+            return None
+
+        self.dns_cache.move_to_end(domain)
+        return entry
 
     def save_dns_cache(self, domain: str, reachable: bool) -> None:
-        self.dns_cache[domain] = reachable
+        entry: DnsCacheEntry = {"reachable": reachable, "timestamp": time.time()}
+        self.dns_cache[domain] = entry
         self.dns_cache.move_to_end(domain)
         if len(self.dns_cache) > MAX_DNS_CACHE_SIZE:
             self.dns_cache.popitem(last=False)
