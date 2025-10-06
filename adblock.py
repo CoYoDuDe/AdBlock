@@ -182,7 +182,10 @@ def ensure_list_stats_entry(
     if duplicates is not None:
         entry["duplicates"] = max(duplicates, 0)
     else:
-        entry["duplicates"] = max(entry["total"] - entry["unique"], 0)
+        total_value = entry.get("total", 0)
+        unique_value = entry.get("unique", 0)
+        subdomain_value = entry.get("subdomains", 0)
+        entry["duplicates"] = max(total_value - unique_value - subdomain_value, 0)
     entry.setdefault("reachable", 0)
     entry.setdefault("unreachable", 0)
     entry.setdefault("score", 0.0)
@@ -461,7 +464,7 @@ def restart_dnsmasq(config: dict) -> bool:
 )
 async def process_list(
     url: str, cache_manager: CacheManager, session: aiohttp.ClientSession
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     """Verarbeitet eine Blockliste und extrahiert Domains"""
     try:
         if config.global_mode == SystemMode.EMERGENCY:
@@ -470,7 +473,7 @@ async def process_list(
                 f"Emergency-Mode: Liste {url} wird übersprungen, um Ressourcen zu sparen",
                 console=True,
             )
-            return 0, 0, 0
+            return 0, 0, 0, 0
 
         logger.debug(f"Verarbeite Liste: {url}")
         async with session.get(url, timeout=CONFIG["http_timeout"]) as response:
@@ -490,7 +493,7 @@ async def process_list(
         logger.debug(f"Inhalt von {url} heruntergeladen, Länge: {len(content)} Zeichen")
         if not content.strip():
             logger.warning(f"Liste {url} ist leer")
-            return 0, 0, 0
+            return 0, 0, 0, 0
         sample_lines = "\n".join(content.splitlines()[:5])
         logger.debug(f"Erste Zeilen von {url}:\n{sample_lines}")
         current_md5 = calculate_md5(content)
@@ -527,7 +530,7 @@ async def process_list(
                 STATISTICS["domain_sources"][url]["subdomains"] = subdomain_count
                 STATISTICS["cache_hits"] += 1
                 logger.info(f"Liste {url} unverändert, verwende Cache")
-                return total_domains, unique_domains, subdomain_count
+                return total_domains, unique_domains, subdomain_count, cached_duplicates
             logger.debug(
                 "Cache-Eintrag für %s ohne vollständige Statistik, führe Verarbeitung erneut durch",
                 url,
@@ -542,6 +545,7 @@ async def process_list(
             temp_file, "w", encoding="utf-8"
         ) as f_temp, aiofiles.open(filtered_file, "w", encoding="utf-8") as f_filtered:
             for domain in parse_domains(content, url):
+                domain_count += 1
                 free_memory = psutil.virtual_memory().available
                 trie.storage.update_threshold()
                 _, batch_size, _ = get_system_resources()
@@ -563,7 +567,6 @@ async def process_list(
                     duplicate_count += 1
                     continue
                 batch.append(domain)
-                domain_count += 1
                 if len(batch) >= batch_size:
                     free_memory = psutil.virtual_memory().available
                     logger.debug(
@@ -623,7 +626,7 @@ async def process_list(
         logger.info(
             f"Extrahierte {domain_count} Domains aus {url}, {unique_count} einzigartig, {duplicate_count} Duplikate"
         )
-        return domain_count, unique_count, subdomain_count
+        return domain_count, unique_count, subdomain_count, duplicate_count
     except aiohttp.ClientError as e:
         logger.warning(f"Netzwerkfehler beim Verarbeiten der Liste {url}: {e}")
         raise
@@ -761,7 +764,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                         STATISTICS["failed_lists"] += 1
                         STATISTICS["error_message"] = message
                         continue
-                    total, unique, subdomains = result
+                    total, unique, subdomains, duplicates = result
                     filtered_path = os.path.join(
                         TMP_DIR, f"{sanitize_url_for_tmp(url)}.filtered"
                     )
@@ -771,13 +774,14 @@ async def main(config_path: str | None = None, debug: bool = False):
                             "total": total,
                             "unique": unique,
                             "subdomains": subdomains,
+                            "duplicates": duplicates,
                         }
                         ensure_list_stats_entry(
                             url,
                             total=total,
                             unique=unique,
                             subdomains=subdomains,
-                            duplicates=max(total - unique, 0),
+                            duplicates=duplicates,
                         )
                     logger.info(f"Verarbeitet {url}: {unique} Domains")
                     memory = psutil.Process().memory_info().rss / (1024 * 1024)
@@ -820,6 +824,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                     total=url_counts.get(url, {}).get("total", 0),
                     unique=url_counts.get(url, {}).get("unique", 0),
                     subdomains=url_counts.get(url, {}).get("subdomains", 0),
+                    duplicates=url_counts.get(url, {}).get("duplicates"),
                 )
                 stats_entry["reachable"] = 0
                 stats_entry["unreachable"] = 0
