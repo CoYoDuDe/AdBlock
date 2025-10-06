@@ -10,7 +10,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import adblock  # noqa: E402
 import caching  # noqa: E402
 import config as config_module  # noqa: E402
-import pytest  # noqa: E402
 
 
 def test_ensure_list_stats_entry_initializes_and_updates(monkeypatch):
