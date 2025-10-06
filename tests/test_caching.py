@@ -319,6 +319,23 @@ def test_hybrid_storage_reset_removes_all_shelve_artifacts(monkeypatch, tmp_path
         storage.db.close()
 
 
+def test_hybrid_storage_total_items_counts_unique_entries(tmp_path):
+    storage = caching.HybridStorage(str(tmp_path / "hybrid_cache_total"))
+
+    try:
+        storage.use_ram = False
+        storage["disk-only.example"] = {"value": 1}
+        storage["second.example"] = {"value": 2}
+
+        storage.use_ram = True
+        storage["disk-only.example"] = {"value": 3}
+        storage["ram-only.example"] = {"value": 4}
+
+        assert storage.total_items() == 3
+    finally:
+        storage.close()
+
+
 def test_hybrid_storage_switch_to_disk_keeps_entries(monkeypatch, tmp_path):
     available_memory = 512 * 1024 * 1024
     monkeypatch.setattr(

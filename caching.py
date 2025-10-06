@@ -236,6 +236,38 @@ class HybridStorage:
     def __len__(self) -> int:
         return len(self.ram_storage) if self.use_ram else len(self.db)
 
+    def total_items(self) -> int:
+        """Gibt die Gesamtanzahl der Einträge in RAM und auf der Festplatte zurück."""
+
+        ram_count = len(self.ram_storage)
+        if self.db is None:
+            return ram_count
+
+        try:
+            disk_count = len(self.db)
+        except Exception as exc:
+            logger.warning(
+                "Fehler beim Bestimmen der Anzahl der Disk-Einträge in %s: %s",
+                self.db_path,
+                exc,
+            )
+            return ram_count
+
+        if not ram_count or not disk_count:
+            return disk_count + ram_count
+
+        try:
+            duplicates = sum(1 for key in self.ram_storage if key in self.db)
+        except Exception as exc:
+            logger.warning(
+                "Fehler beim Abgleichen von RAM- und Disk-Einträgen für %s: %s",
+                self.db_path,
+                exc,
+            )
+            duplicates = 0
+
+        return disk_count + ram_count - duplicates
+
     def clear(self) -> None:
         self.flush_to_disk()
         if self.use_ram:
