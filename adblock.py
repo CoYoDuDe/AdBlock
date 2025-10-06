@@ -469,13 +469,11 @@ async def process_list(
             logger.debug(f"HTTP-Status für {url}: {response.status}")
             if response.status == 404:
                 logger.error(f"Liste {url} nicht gefunden (404)")
-                STATISTICS["failed_lists"] += 1
-                return 0, 0, 0
+                raise aiohttp.ClientError("Liste nicht gefunden (404)")
             if response.status >= 400:
                 logger.error(
                     f"Fehler beim Abrufen der Liste {url}: HTTP-Status {response.status}, Grund: {response.reason}"
                 )
-                STATISTICS["failed_lists"] += 1
                 raise aiohttp.ClientError(
                     f"HTTP-Fehler: {response.status} {response.reason}"
                 )
@@ -619,21 +617,14 @@ async def process_list(
         )
         return domain_count, unique_count, subdomain_count
     except aiohttp.ClientError as e:
-        msg = f"Netzwerkfehler beim Verarbeiten der Liste {url}: {e}"
-        logger.warning(msg)
-        STATISTICS["failed_lists"] += 1
-        STATISTICS["error_message"] = msg
-        return 0, 0, 0
+        logger.warning(f"Netzwerkfehler beim Verarbeiten der Liste {url}: {e}")
+        raise
     except asyncio.TimeoutError as e:
-        msg = f"Netzwerk-Timeout bei der Liste {url}: {e}"
-        logger.warning(msg)
-        STATISTICS["failed_lists"] += 1
-        STATISTICS["error_message"] = msg
-        return 0, 0, 0
+        logger.warning(f"Netzwerk-Timeout bei der Liste {url}: {e}")
+        raise
     except Exception as e:
         logger.error(f"Unbekannter Fehler beim Verarbeiten der Liste {url}: {e}")
-        STATISTICS["failed_lists"] += 1
-        return 0, 0, 0
+        raise
 
 
 async def main(config_path: str | None = None, debug: bool = False):
@@ -752,13 +743,15 @@ async def main(config_path: str | None = None, debug: bool = False):
                 ]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for url, result in zip(batch, results):
-                    if isinstance(result, (aiohttp.ClientError, asyncio.TimeoutError)):
-                        logger.warning(f"Netzwerkfehler bei {url}: {result}")
-                        STATISTICS["failed_lists"] += 1
-                        continue
                     if isinstance(result, Exception):
-                        logger.error(f"Fehler bei {url}: {result}")
+                        if isinstance(result, (aiohttp.ClientError, asyncio.TimeoutError)):
+                            message = f"Netzwerkfehler bei {url}: {result}"
+                            logger.warning(message)
+                        else:
+                            message = f"Fehler bei {url}: {result}"
+                            logger.error(message)
                         STATISTICS["failed_lists"] += 1
+                        STATISTICS["error_message"] = message
                         continue
                     total, unique, subdomains = result
                     filtered_path = os.path.join(
