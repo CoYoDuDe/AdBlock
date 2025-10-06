@@ -36,6 +36,7 @@ from caching import (
     CacheManager,
     DomainTrie,
     cleanup_temp_files,
+    sanitize_tmp_identifier,
 )
 import config
 from config import (
@@ -137,6 +138,12 @@ STATISTICS = {
 # einer Stelle erfolgen müssen.
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_url_for_tmp(url: str) -> str:
+    """Gibt einen sicheren Dateinamen für die zwischengespeicherte URL zurück."""
+
+    return sanitize_tmp_identifier(url)
 
 
 def load_config(config_path: str | None = None):
@@ -438,12 +445,9 @@ async def process_list(
         logger.debug(f"Erste Zeilen von {url}:\n{sample_lines}")
         current_md5 = calculate_md5(content)
         list_cache = cache_manager.load_list_cache()
-        temp_file = os.path.join(
-            TMP_DIR, f"{url.replace('://', '__').replace('/', '__')}.tmp"
-        )
-        filtered_file = os.path.join(
-            TMP_DIR, f"{url.replace('://', '__').replace('/', '__')}.filtered"
-        )
+        sanitized_url = sanitize_url_for_tmp(url)
+        temp_file = os.path.join(TMP_DIR, f"{sanitized_url}.tmp")
+        filtered_file = os.path.join(TMP_DIR, f"{sanitized_url}.filtered")
         if url in list_cache and list_cache[url]["md5"] == current_md5:
             logger.info(f"Liste {url} unverändert, verwende Cache")
             if os.path.exists(filtered_file):
@@ -680,12 +684,10 @@ async def main(config_path: str | None = None, debug: bool = False):
                         STATISTICS["failed_lists"] += 1
                         continue
                     total, unique, subdomains = result
-                    if os.path.exists(
-                        os.path.join(
-                            TMP_DIR,
-                            f"{url.replace('://', '__').replace('/', '__')}.filtered",
-                        )
-                    ):
+                    filtered_path = os.path.join(
+                        TMP_DIR, f"{sanitize_url_for_tmp(url)}.filtered"
+                    )
+                    if os.path.exists(filtered_path):
                         processed_urls.append(url)
                         url_counts[url] = {
                             "total": total,
@@ -729,7 +731,7 @@ async def main(config_path: str | None = None, debug: bool = False):
         ) as f_unreachable:
             for url in processed_urls:
                 filtered_file = os.path.join(
-                    TMP_DIR, f"{url.replace('://', '__').replace('/', '__')}.filtered"
+                    TMP_DIR, f"{sanitize_url_for_tmp(url)}.filtered"
                 )
                 if not os.path.exists(filtered_file):
                     continue
