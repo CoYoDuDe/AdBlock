@@ -7,19 +7,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import caching  # noqa: E402
 
 
-def test_domain_trie_insert_and_parent(monkeypatch, tmp_path):
+def test_domain_trie_flush_preserves_parent_detection(monkeypatch, tmp_path):
     monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
     monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
     config = caching.DEFAULT_CONFIG.copy()
     config["use_bloom_filter"] = False
+    config["remove_redundant_subdomains"] = True
     monkeypatch.setattr(caching, "DEFAULT_CONFIG", config)
 
     trie = caching.DomainTrie("http://example.com")
-    trie.insert("example.com")
+    first_batch = ["example.com"]
+    for domain in first_batch:
+        trie.insert(domain)
+
     assert trie.has_parent("sub.example.com")
     assert not trie.has_parent("example.com")
+
     trie.flush()
-    assert not trie.has_parent("sub.example.com")
+    assert trie.has_parent("sub.example.com")
+
+    second_batch = ["sub.example.com", "unique-example.net"]
+    processed_domains = []
+
+    for domain in second_batch:
+        if config["remove_redundant_subdomains"] and trie.has_parent(domain):
+            continue
+        trie.insert(domain)
+        processed_domains.append(domain)
+
+    assert processed_domains == ["unique-example.net"]
+
+    trie.flush()
+    assert trie.has_parent("sub.unique-example.net")
     trie.close()
 
 

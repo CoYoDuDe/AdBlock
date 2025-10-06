@@ -97,11 +97,35 @@ class HybridStorage:
             logger.warning("RAM check failed: %s", exc)
             return True
 
-    def flush_to_disk(self) -> None:
+    def persist_ram_to_disk(self) -> None:
+        """Persistiert den aktuellen RAM-Inhalt sicher auf die Festplatte."""
+
+        if self.db is None:
+            return
+
         if self.use_ram:
-            for key, value in self.ram_storage.items():
-                self.db[key] = value
+            try:
+                for key, value in list(self.ram_storage.items()):
+                    self.db[key] = value
+            except Exception as exc:
+                logger.warning(
+                    "Fehler beim Persistieren der RAM-Daten nach %s: %s",
+                    self.db_path,
+                    exc,
+                )
+                raise
+
+        try:
             self.db.sync()
+        except Exception as exc:
+            logger.warning(
+                "Fehler beim Synchronisieren der HybridStorage-DB %s: %s",
+                self.db_path,
+                exc,
+            )
+
+    def flush_to_disk(self) -> None:
+        self.persist_ram_to_disk()
 
     def reset_if_corrupt(self) -> None:
         try:
@@ -236,8 +260,7 @@ class DomainTrie:
         return False
 
     def flush(self) -> None:
-        self.storage.clear()
-        self.storage[self.root_key] = TrieNode()
+        self.storage.persist_ram_to_disk()
 
     def close(self) -> None:
         self.storage.close()
