@@ -1,9 +1,12 @@
 import asyncio
+from datetime import datetime
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock
 import subprocess
 from types import SimpleNamespace
+import time
+from threading import Lock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import networking  # noqa: E402
@@ -180,9 +183,148 @@ def test_domain_batch_limits_concurrency():
             dns_cache=None,
             cache_lock=None,
             max_concurrent=max_concurrent,
+            config={"max_retries": 1, "retry_delay": 0},
         )
     )
 
     assert len(results) == len(domains)
     assert resolver.max_parallel_calls <= max_concurrent
     assert resolver.max_parallel_calls > 1
+
+
+def test_test_dns_entry_async_respects_config(monkeypatch):
+    class FailingResolver:
+        def __init__(self):
+            self.calls = 0
+
+        async def query(self, domain, record):
+            self.calls += 1
+            raise networking.aiodns.error.DNSError("fail")
+
+    sleep_calls = []
+
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(networking.asyncio, "sleep", fake_sleep)
+    resolver = FailingResolver()
+    config = {"max_retries": 2, "retry_delay": 0.01}
+
+    async def run_test():
+        semaphore = asyncio.Semaphore(1)
+        return await networking.test_dns_entry_async(
+            "example.com",
+            resolver,
+            record_type="TXT",
+            semaphore=semaphore,
+            config=config,
+        )
+
+    result = asyncio.run(run_test())
+
+    assert result is False
+    assert resolver.calls == config["max_retries"]
+    assert sleep_calls == [config["retry_delay"]] * config["max_retries"]
+
+
+def test_test_single_domain_async_respects_domain_cache_validity():
+    class CacheManager:
+        def get_dns_cache(self, domain):
+            return None
+
+        def load_domain_cache(self):
+            return {
+                "example.com": {
+                    "checked_at": datetime.now().isoformat(),
+                    "reachable": True,
+                }
+            }
+
+        def save_dns_cache(self, domain, reachable):
+            pass
+
+        def save_domain(self, domain, reachable, url):
+            pass
+
+    class Resolver:
+        def __init__(self):
+            self.calls = 0
+
+        async def query(self, domain, record):
+            self.calls += 1
+            return [domain, record]
+
+    cache_manager = CacheManager()
+    resolver = Resolver()
+    config = {"domain_cache_validity_days": 0, "max_retries": 1, "retry_delay": 0}
+
+    async def run_test():
+        return await networking.test_single_domain_async(
+            "example.com",
+            "https://example.com",
+            resolver,
+            cache_manager,
+            set(),
+            set(),
+            dns_cache=None,
+            cache_lock=None,
+            max_concurrent=1,
+            semaphore=None,
+            config=config,
+        )
+
+    result = asyncio.run(run_test())
+
+    assert result is True
+    assert resolver.calls == 1
+
+
+def test_test_single_domain_async_respects_dns_cache_ttl():
+    class CacheManager:
+        def get_dns_cache(self, domain):
+            return None
+
+        def load_domain_cache(self):
+            return {}
+
+        def save_dns_cache(self, domain, reachable):
+            pass
+
+        def save_domain(self, domain, reachable, url):
+            pass
+
+    class Resolver:
+        def __init__(self):
+            self.calls = 0
+
+        async def query(self, domain, record):
+            self.calls += 1
+            return [domain, record]
+
+    dns_cache = {
+        "example.com": {"reachable": True, "timestamp": time.time() - 2}
+    }
+    cache_lock = Lock()
+    cache_manager = CacheManager()
+    resolver = Resolver()
+    config = {"dns_cache_ttl": 1, "max_retries": 1, "retry_delay": 0}
+
+    async def run_test():
+        return await networking.test_single_domain_async(
+            "example.com",
+            "https://example.com",
+            resolver,
+            cache_manager,
+            set(),
+            set(),
+            dns_cache=dns_cache,
+            cache_lock=cache_lock,
+            max_concurrent=1,
+            semaphore=None,
+            config=config,
+        )
+
+    result = asyncio.run(run_test())
+
+    assert result is True
+    assert resolver.calls == 1
