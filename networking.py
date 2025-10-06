@@ -140,7 +140,18 @@ async def test_single_domain_async(
     dns_cache_ttl = active_config.get("dns_cache_ttl", DEFAULT_CONFIG["dns_cache_ttl"])
     cached_dns = cache_manager.get_dns_cache(domain)
     if cached_dns is not None:
-        return cached_dns
+        if isinstance(cached_dns, dict):
+            cached_timestamp = cached_dns.get("timestamp")
+            if (
+                dns_cache_ttl <= 0
+                or (
+                    cached_timestamp is not None
+                    and time.time() - cached_timestamp <= dns_cache_ttl
+                )
+            ):
+                return bool(cached_dns.get("reachable"))
+        else:
+            return bool(cached_dns)
     cache = cache_manager.load_domain_cache()
     if domain in cache:
         entry = cache[domain]

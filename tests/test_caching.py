@@ -1,4 +1,5 @@
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -89,13 +90,31 @@ def test_cache_manager_dns_cache(monkeypatch, tmp_path):
     cm = caching.CacheManager(str(tmp_path / "cache.db"), flush_interval=1)
     cm.save_dns_cache("a.com", True)
     cm.save_dns_cache("b.com", False)
-    assert cm.get_dns_cache("a.com") is True
-    assert cm.get_dns_cache("b.com") is False
+    cached_a = cm.get_dns_cache("a.com")
+    cached_b = cm.get_dns_cache("b.com")
+    assert cached_a is not None and cached_a["reachable"] is True
+    assert cached_b is not None and cached_b["reachable"] is False
+    assert cached_a["timestamp"] <= time.time()
     cm.save_dns_cache("c.com", True)
     assert "a.com" not in cm.dns_cache
     cm.save_domain("a.com", True, "url")
     cache = cm.load_domain_cache()
     assert "a.com" in cache
+
+
+def test_cache_manager_dns_cache_expires_entries(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+
+    cm = caching.CacheManager(
+        str(tmp_path / "cache.db"), flush_interval=1, config={"dns_cache_ttl": 1}
+    )
+    cm.save_dns_cache("expired.com", True)
+    cm.dns_cache["expired.com"]["timestamp"] -= 5
+
+    assert cm.get_dns_cache("expired.com") is None
+    assert "expired.com" not in cm.dns_cache
 
 
 def test_cache_manager_persists_domain_cache(monkeypatch, tmp_path):

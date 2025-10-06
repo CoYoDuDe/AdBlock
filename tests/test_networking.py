@@ -1,4 +1,5 @@
 import asyncio
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -10,6 +11,8 @@ from threading import Lock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import networking  # noqa: E402
+import caching  # noqa: E402
+import config as config_module  # noqa: E402
 
 
 def test_send_email_no_send(monkeypatch):
@@ -328,3 +331,54 @@ def test_test_single_domain_async_respects_dns_cache_ttl():
 
     assert result is True
     assert resolver.calls == 1
+
+
+def test_test_single_domain_async_requeries_after_cache_expiry(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+
+    fresh_dns_cache = OrderedDict()
+    monkeypatch.setattr(config_module, "dns_cache", fresh_dns_cache, raising=False)
+    monkeypatch.setattr(caching, "dns_cache", fresh_dns_cache, raising=False)
+
+    cache_manager = caching.CacheManager(
+        str(tmp_path / "cache.db"), flush_interval=1, config={"dns_cache_ttl": 1}
+    )
+    cache_manager.save_dns_cache("example.com", True)
+    cache_manager.dns_cache["example.com"]["timestamp"] -= 5
+
+    class Resolver:
+        def __init__(self):
+            self.calls = 0
+
+        async def query(self, domain, record):
+            self.calls += 1
+            return [domain, record]
+
+    resolver = Resolver()
+
+    async def run_test():
+        return await networking.test_single_domain_async(
+            "example.com",
+            "https://example.com",
+            resolver,
+            cache_manager,
+            set(),
+            set(),
+            dns_cache=None,
+            cache_lock=None,
+            max_concurrent=1,
+            semaphore=None,
+            config={"max_retries": 1, "retry_delay": 0, "dns_cache_ttl": 1},
+        )
+
+    result = asyncio.run(run_test())
+
+    try:
+        assert result is True
+        assert resolver.calls == 1
+    finally:
+        cache_manager.domain_cache.close()

@@ -8,7 +8,7 @@ dns_cache_lock = Lock()
 cache_manager = None
 global_mode = None
 DNS_CACHE: dict[str, dict[str, float]] = {}
-dns_cache: OrderedDict[str, bool] = OrderedDict()
+dns_cache: OrderedDict[str, dict[str, float | bool]] = OrderedDict()
 logged_messages = set()
 console_logged_messages = set()
 
