@@ -4,6 +4,7 @@ import logging
 import time
 from copy import deepcopy
 
+from caching import HybridStorage
 from config import DEFAULT_CONFIG
 from filter_engine import evaluate_lists
 from writer import export_prometheus_metrics, export_statistics_csv
@@ -48,8 +49,19 @@ def test_statistics_exports_and_metrics(tmp_path):
     assert "https://ads.example.com/hosts.txt" in csv_content
     assert ",6,2,2," in csv_content
 
+    storage = HybridStorage(str(tmp_path / "domain_cache"))
+    storage.use_ram = False
+    try:
+        storage["disk-only.example"] = {"checked_at": "now"}
+        storage["another-disk.example"] = {"checked_at": "now"}
+        cache_size = storage.total_items()
+    finally:
+        storage.close()
+
+    assert cache_size == 2
+
     start_time = time.time() - 5
-    export_prometheus_metrics(str(csv_dir), statistics, start_time, 42, logger)
+    export_prometheus_metrics(str(csv_dir), statistics, start_time, cache_size, logger)
     metrics_content = (csv_dir / "metrics.prom").read_text(encoding="utf-8")
 
     assert "adblock_list_total" in metrics_content

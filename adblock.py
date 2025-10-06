@@ -970,11 +970,14 @@ async def main(config_path: str | None = None, debug: bool = False):
         if config.global_mode != SystemMode.EMERGENCY:
             export_statistics_csv(TMP_DIR, STATISTICS, logger)
             if CONFIG["export_prometheus"]:
+                cache_size = 0
+                if config.cache_manager and config.cache_manager.domain_cache:
+                    cache_size = config.cache_manager.domain_cache.total_items()
                 export_prometheus_metrics(
                     TMP_DIR,
                     STATISTICS,
                     start_time,
-                    len(config.cache_manager.domain_cache.ram_storage),
+                    cache_size,
                     logger,
                 )
         recommendations = (
