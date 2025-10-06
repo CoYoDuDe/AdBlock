@@ -31,6 +31,7 @@ import socket
 import asyncio
 import backoff
 from enum import Enum
+from typing import Any, Dict
 
 from caching import (
     CacheManager,
@@ -102,6 +103,21 @@ def log_once(level, message, console=True):
         console_logged_messages.add(message)
 
 
+def create_default_list_stats_entry() -> Dict[str, Any]:
+    """Erzeugt den Standarddatensatz für eine Listenstatistik."""
+
+    return {
+        "total": 0,
+        "unique": 0,
+        "reachable": 0,
+        "unreachable": 0,
+        "duplicates": 0,
+        "subdomains": 0,
+        "score": 0.0,
+        "category": "unknown",
+    }
+
+
 STATISTICS = {
     "total_domains": 0,
     "unique_domains": 0,
@@ -112,18 +128,7 @@ STATISTICS = {
     "cache_hits": 0,
     "cache_flushes": 0,
     "trie_cache_hits": 0,
-    "list_stats": defaultdict(
-        lambda: {
-            "total": 0,
-            "unique": 0,
-            "reachable": 0,
-            "unreachable": 0,
-            "duplicates": 0,
-            "subdomains": 0,
-            "score": 0.0,
-            "category": "unknown",
-        }
-    ),
+    "list_stats": defaultdict(create_default_list_stats_entry),
     "list_recommendations": [],
     "error_message": "",
     "run_failed": False,
@@ -144,6 +149,34 @@ def sanitize_url_for_tmp(url: str) -> str:
     """Gibt einen sicheren Dateinamen für die zwischengespeicherte URL zurück."""
 
     return sanitize_tmp_identifier(url)
+
+
+def ensure_list_stats_entry(
+    url: str,
+    *,
+    total: int | None = None,
+    unique: int | None = None,
+    subdomains: int | None = None,
+    duplicates: int | None = None,
+) -> Dict[str, Any]:
+    """Stellt sicher, dass für die URL ein Statistik-Eintrag existiert und aktualisiert ihn."""
+
+    entry = STATISTICS["list_stats"].setdefault(url, create_default_list_stats_entry())
+    if total is not None:
+        entry["total"] = total
+    if unique is not None:
+        entry["unique"] = unique
+    if subdomains is not None:
+        entry["subdomains"] = subdomains
+    if duplicates is not None:
+        entry["duplicates"] = max(duplicates, 0)
+    else:
+        entry["duplicates"] = max(entry["total"] - entry["unique"], 0)
+    entry.setdefault("reachable", 0)
+    entry.setdefault("unreachable", 0)
+    entry.setdefault("score", 0.0)
+    entry.setdefault("category", "unknown")
+    return entry
 
 
 def load_config(config_path: str | None = None):
@@ -694,16 +727,13 @@ async def main(config_path: str | None = None, debug: bool = False):
                             "unique": unique,
                             "subdomains": subdomains,
                         }
-                        STATISTICS["list_stats"][url] = {
-                            "total": total,
-                            "unique": unique,
-                            "reachable": 0,
-                            "unreachable": 0,
-                            "duplicates": max(total - unique, 0),
-                            "subdomains": subdomains,
-                            "score": 0.0,
-                            "category": "unknown",
-                        }
+                        ensure_list_stats_entry(
+                            url,
+                            total=total,
+                            unique=unique,
+                            subdomains=subdomains,
+                            duplicates=max(total - unique, 0),
+                        )
                     logger.info(f"Verarbeitet {url}: {unique} Domains")
                     memory = psutil.Process().memory_info().rss / (1024 * 1024)
                     logger.debug(f"Speicherverbrauch nach {url}: {memory:.2f} MB")
@@ -740,22 +770,11 @@ async def main(config_path: str | None = None, debug: bool = False):
             UNREACHABLE_FILE, "a", encoding="utf-8"
         ) as f_unreachable:
             for url in processed_urls:
-                stats_entry = STATISTICS["list_stats"].setdefault(
+                stats_entry = ensure_list_stats_entry(
                     url,
-                    {
-                        "total": url_counts.get(url, {}).get("total", 0),
-                        "unique": url_counts.get(url, {}).get("unique", 0),
-                        "reachable": 0,
-                        "unreachable": 0,
-                        "duplicates": max(
-                            url_counts.get(url, {}).get("total", 0)
-                            - url_counts.get(url, {}).get("unique", 0),
-                            0,
-                        ),
-                        "subdomains": url_counts.get(url, {}).get("subdomains", 0),
-                        "score": 0.0,
-                        "category": "unknown",
-                    },
+                    total=url_counts.get(url, {}).get("total", 0),
+                    unique=url_counts.get(url, {}).get("unique", 0),
+                    subdomains=url_counts.get(url, {}).get("subdomains", 0),
                 )
                 stats_entry["reachable"] = 0
                 stats_entry["unreachable"] = 0
