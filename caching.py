@@ -214,13 +214,55 @@ class HybridStorage:
             self.db[key] = value
             self.db.sync()
 
+    def _load_from_disk_if_present(self, key: str) -> bool:
+        """Lädt einen vorhandenen Schlüssel von der Festplatte in den RAM."""
+
+        if not self.use_ram or key in self.ram_storage or self.db is None:
+            return False
+
+        try:
+            value = self.db[key]
+        except KeyError:
+            return False
+
+        self.ram_storage[key] = value
+        return True
+
+    def _populate_ram_from_disk(self) -> None:
+        """Synchronisiert fehlende Schlüssel aus der Datenbank in den RAM."""
+
+        if not self.use_ram or self.db is None:
+            return
+
+        for disk_key in self.db.keys():
+            self._load_from_disk_if_present(str(disk_key))
+
     def __getitem__(self, key: str) -> Any:
         key = str(key)
-        return self.ram_storage[key] if self.use_ram else self.db[key]
+        if not self.use_ram:
+            if self.db is None:
+                raise KeyError(key)
+            return self.db[key]
+
+        if key in self.ram_storage:
+            return self.ram_storage[key]
+
+        if self._load_from_disk_if_present(key):
+            return self.ram_storage[key]
+
+        raise KeyError(key)
 
     def __contains__(self, key: str) -> bool:
         key = str(key)
-        return key in (self.ram_storage if self.use_ram else self.db)
+        if not self.use_ram:
+            if self.db is None:
+                return False
+            return key in self.db
+
+        if key in self.ram_storage:
+            return True
+
+        return self._load_from_disk_if_present(key)
 
     def __delitem__(self, key: str) -> None:
         key = str(key)
@@ -231,10 +273,18 @@ class HybridStorage:
             self.db.sync()
 
     def items(self):
-        return self.ram_storage.items() if self.use_ram else self.db.items()
+        if not self.use_ram:
+            return self.db.items() if self.db is not None else {}.items()
+
+        self._populate_ram_from_disk()
+        return self.ram_storage.items()
 
     def __len__(self) -> int:
-        return len(self.ram_storage) if self.use_ram else len(self.db)
+        if not self.use_ram:
+            return len(self.db) if self.db is not None else 0
+
+        self._populate_ram_from_disk()
+        return len(self.ram_storage)
 
     def total_items(self) -> int:
         """Gibt die Gesamtanzahl der Einträge in RAM und auf der Festplatte zurück."""

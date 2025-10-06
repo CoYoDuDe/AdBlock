@@ -365,3 +365,34 @@ def test_hybrid_storage_switch_to_disk_keeps_entries(monkeypatch, tmp_path):
         assert storage.ram_storage == {}
     finally:
         storage.close()
+
+
+def test_hybrid_storage_ram_mode_loads_persisted_entries(monkeypatch, tmp_path):
+    monkeypatch.setattr(caching.HybridStorage, "should_use_ram", lambda self: True)
+
+    db_path = tmp_path / "hybrid_cache_ram"
+
+    first_storage = caching.HybridStorage(str(db_path))
+    try:
+        assert first_storage.use_ram is True
+        first_storage["persisted-a.com"] = {"reachable": True}
+        first_storage["persisted-b.net"] = {"reachable": False}
+        first_storage.persist_ram_to_disk()
+    finally:
+        first_storage.close()
+
+    second_storage = caching.HybridStorage(str(db_path))
+    try:
+        assert second_storage.use_ram is True
+        assert second_storage.ram_storage == {}
+
+        assert "persisted-a.com" in second_storage
+        value = second_storage["persisted-b.net"]
+
+        assert value["reachable"] is False
+        assert set(second_storage.ram_storage) == {
+            "persisted-a.com",
+            "persisted-b.net",
+        }
+    finally:
+        second_storage.close()
