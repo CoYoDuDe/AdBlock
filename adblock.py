@@ -30,7 +30,7 @@ import socket
 import asyncio
 import backoff
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Dict, Sequence
 
 from caching import (
     CacheManager,
@@ -198,7 +198,51 @@ def sync_cache_flush_statistics(cache_manager: CacheManager | None) -> None:
 
     if cache_manager is None:
         return
+
     STATISTICS["cache_flushes"] = cache_manager.flush_count
+
+
+async def load_unique_sorted_domains(file_path: str) -> list[str]:
+    """Liest Domains aus einer Datei, entfernt Duplikate und sortiert deterministisch."""
+
+    async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+        domains = [
+            line.strip()
+            async for line in f
+            if line.strip() and line.strip() != ""
+        ]
+    unique_domains = dict.fromkeys(domains)
+    return sorted(unique_domains)
+
+
+def build_dnsmasq_lines(
+    domains: Sequence[str], config_values: Dict[str, Any], include_ipv6: bool
+) -> list[str]:
+    """Erzeugt dnsmasq-Einträge für die angegebenen Domains."""
+
+    dnsmasq_lines: list[str] = []
+    if config_values.get("use_ipv4_output", False):
+        dnsmasq_lines.extend(
+            f"address=/{domain}/{config_values['web_server_ipv4']}"
+            for domain in domains
+        )
+    if config_values.get("use_ipv6_output", False) and include_ipv6:
+        dnsmasq_lines.extend(
+            f"address=/{domain}/{config_values['web_server_ipv6']}"
+            for domain in domains
+        )
+    return dnsmasq_lines
+
+
+def build_hosts_content(domains: Sequence[str], config_values: Dict[str, Any]) -> str:
+    """Erzeugt den Inhalt der hosts.txt für die angegebenen Domains."""
+
+    lines = [
+        f"{config_values['hosts_ip']} {domain}"
+        for domain in domains
+        if domain
+    ]
+    return "\n".join(lines).strip()
 
 
 def load_config(config_path: str | None = None):
@@ -925,38 +969,23 @@ async def main(config_path: str | None = None, debug: bool = False):
                                 stats_entry["unreachable"] += 1
         evaluate_lists(STATISTICS, CONFIG)
         logger.debug("Listen bewertet")
-        sorted_domains = []
-        async with aiofiles.open(REACHABLE_FILE, "r", encoding="utf-8") as f:
-            sorted_domains = sorted(
-                [
-                    line.strip()
-                    async for line in f
-                    if line.strip() and line.strip() != ""
-                ]
-            )
+        sorted_domains = await load_unique_sorted_domains(REACHABLE_FILE)
         logger.debug(f"Anzahl der erreichbaren Domains: {len(sorted_domains)}")
         logger.debug(f"Erste 5 erreichbare Domains (Beispiel): {sorted_domains[:5]}")
-        dnsmasq_lines = []
+        ipv6_supported = False
+        if CONFIG["use_ipv6_output"]:
+            ipv6_supported = await is_ipv6_supported(CONFIG)
+        dnsmasq_lines = build_dnsmasq_lines(sorted_domains, CONFIG, ipv6_supported)
         if CONFIG["use_ipv4_output"]:
-            dnsmasq_lines.extend(
-                f"address=/{domain}/{CONFIG['web_server_ipv4']}"
-                for domain in sorted_domains
-            )
             logger.debug(
-                f"IPv4-Ausgabe aktiviert, {len(dnsmasq_lines)} Einträge für dnsmasq.conf mit IPv4"
+                f"IPv4-Ausgabe aktiviert, {len(sorted_domains)} Einträge für dnsmasq.conf mit IPv4"
             )
-        if CONFIG["use_ipv6_output"] and await is_ipv6_supported(CONFIG):
-            dnsmasq_lines.extend(
-                f"address=/{domain}/{CONFIG['web_server_ipv6']}"
-                for domain in sorted_domains
-            )
+        if CONFIG["use_ipv6_output"] and ipv6_supported:
             logger.debug(
                 f"IPv6-Ausgabe aktiviert, {len(dnsmasq_lines)} Einträge für dnsmasq.conf mit IPv6"
             )
         dnsmasq_content = "\n".join(dnsmasq_lines)
-        hosts_content = "\n".join(
-            f"{CONFIG['hosts_ip']} {domain}" for domain in sorted_domains if domain
-        ).strip()
+        hosts_content = build_hosts_content(sorted_domains, CONFIG)
         logger.debug(
             f"Schreibe {len(sorted_domains)} Domains in hosts.txt mit IP {CONFIG['hosts_ip']}"
         )
