@@ -41,6 +41,13 @@ def parse_domains(content: str, url: str) -> Iterator[str]:
             line = line.strip()
             if not line or line.startswith(("#", "!")):
                 continue
+            for comment_symbol in ("#", "!"):
+                index = line.find(comment_symbol)
+                if index > 0:
+                    line = line[:index].strip()
+                    break
+            if not line:
+                continue
             match = DOMAIN_PATTERN.match(line)
             if match:
                 domain = (match.group(1) or match.group(2) or match.group(3)).lower()

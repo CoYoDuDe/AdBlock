@@ -22,6 +22,15 @@ def test_parse_domains_typical_lines():
     assert result == ["example.com", "ads.example.com", "sub.example.com"]
 
 
+def test_parse_domains_with_inline_comment():
+    content = """
+    0.0.0.0 inline.example # Kommentar am Ende
+    ||tracking.example^ ! Zusätzlicher Kommentar
+    """
+    result = list(parse_domains(content, "dummy"))
+    assert result == ["inline.example", "tracking.example"]
+
+
 def test_ist_gueltige_domain():
     gueltige = [
         "example.com",
