@@ -30,7 +30,7 @@ import socket
 import asyncio
 import backoff
 from enum import Enum
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, Sequence, Set
 
 from caching import (
     CacheManager,
@@ -133,6 +133,17 @@ STATISTICS = {
     "run_failed": False,
     "domain_sources": {},
 }
+
+
+def calculate_unique_domains(
+    url_counts: Dict[str, Dict[str, int]],
+    global_unique_domains: Set[str],
+) -> int:
+    """Berechnet die Anzahl einzigartiger Domains über alle Listen."""
+
+    if global_unique_domains:
+        return len(global_unique_domains)
+    return sum(counts.get("unique", 0) for counts in url_counts.values())
 
 
 # Die Standardkonfiguration und das Log-Format werden zentral in config.py
@@ -781,6 +792,7 @@ async def main(config_path: str | None = None, debug: bool = False):
         )
 
         url_counts = {}
+        global_unique_domains: Set[str] = set()
         processed_urls = []
         logger.debug("Starte Verarbeitung der Blocklisten...")
         async with aiohttp.ClientSession() as session:
@@ -848,8 +860,8 @@ async def main(config_path: str | None = None, debug: bool = False):
         STATISTICS["total_domains"] = sum(
             counts["total"] for counts in url_counts.values()
         )
-        STATISTICS["unique_domains"] = sum(
-            counts["unique"] for counts in url_counts.values()
+        STATISTICS["unique_domains"] = calculate_unique_domains(
+            url_counts, global_unique_domains
         )
         logger.debug("Statistiken berechnet")
         max_jobs, batch_size, max_concurrent_dns = get_system_resources()
@@ -882,6 +894,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                     async for line in f:
                         domain = line.strip()
                         if domain:
+                            global_unique_domains.add(domain)
                             free_memory = psutil.virtual_memory().available
                             config.cache_manager.domain_cache.update_threshold()
                             _, batch_size, max_concurrent_dns = get_system_resources()
