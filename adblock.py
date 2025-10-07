@@ -226,6 +226,14 @@ async def load_unique_sorted_domains(file_path: str) -> list[str]:
     return sorted(unique_domains)
 
 
+async def load_sorted_domains_with_statistics(file_path: str) -> list[str]:
+    """Lädt sortierte Domains und aktualisiert die Statistik der erreichbaren Domains."""
+
+    sorted_domains = await load_unique_sorted_domains(file_path)
+    STATISTICS["reachable_domains"] = len(sorted_domains)
+    return sorted_domains
+
+
 def build_dnsmasq_lines(
     domains: Sequence[str], config_values: Dict[str, Any], include_ipv6: bool
 ) -> list[str]:
@@ -982,7 +990,7 @@ async def main(config_path: str | None = None, debug: bool = False):
                                 stats_entry["unreachable"] += 1
         evaluate_lists(STATISTICS, CONFIG)
         logger.debug("Listen bewertet")
-        sorted_domains = await load_unique_sorted_domains(REACHABLE_FILE)
+        sorted_domains = await load_sorted_domains_with_statistics(REACHABLE_FILE)
         logger.debug(f"Anzahl der erreichbaren Domains: {len(sorted_domains)}")
         logger.debug(f"Erste 5 erreichbare Domains (Beispiel): {sorted_domains[:5]}")
         ipv6_supported = False
@@ -1012,9 +1020,13 @@ async def main(config_path: str | None = None, debug: bool = False):
             await f.write(hosts_content)
         if CONFIG["save_unreachable"] and os.path.exists(UNREACHABLE_FILE):
             async with aiofiles.open(UNREACHABLE_FILE, "r", encoding="utf-8") as f:
-                unreachable_domains = sorted(
-                    [line.strip() async for line in f if line.strip()]
+                unique_unreachable = dict.fromkeys(
+                    line.strip()
+                    async for line in f
+                    if line.strip()
                 )
+            unreachable_domains = sorted(unique_unreachable)
+            STATISTICS["unreachable_domains"] = len(unreachable_domains)
             async with aiofiles.open(
                 os.path.join(TMP_DIR, "unreachable.txt"), "w", encoding="utf-8"
             ) as f:
