@@ -204,6 +204,25 @@ def ensure_list_stats_entry(
     return entry
 
 
+async def deduplicate_unreachable_domains() -> list[str]:
+    """Liest die unerreichbaren Domains ein, dedupliziert sie und aktualisiert die Statistik."""
+
+    if not os.path.exists(UNREACHABLE_FILE):
+        STATISTICS["unreachable_domains"] = 0
+        return []
+
+    async with aiofiles.open(UNREACHABLE_FILE, "r", encoding="utf-8") as file:
+        raw_unreachable = [line.strip() async for line in file if line.strip()]
+
+    unique_unreachable = sorted(dict.fromkeys(raw_unreachable))
+
+    async with aiofiles.open(UNREACHABLE_FILE, "w", encoding="utf-8") as file:
+        await file.write("\n".join(unique_unreachable))
+
+    STATISTICS["unreachable_domains"] = len(unique_unreachable)
+    return unique_unreachable
+
+
 def sync_cache_flush_statistics(cache_manager: CacheManager | None) -> None:
     """Synchronisiert den Cache-Flush-Zähler mit den globalen Statistiken."""
 
@@ -218,9 +237,7 @@ async def load_unique_sorted_domains(file_path: str) -> list[str]:
 
     async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
         domains = [
-            line.strip()
-            async for line in f
-            if line.strip() and line.strip() != ""
+            line.strip() async for line in f if line.strip() and line.strip() != ""
         ]
     unique_domains = dict.fromkeys(domains)
     return sorted(unique_domains)
@@ -256,11 +273,7 @@ def build_dnsmasq_lines(
 def build_hosts_content(domains: Sequence[str], config_values: Dict[str, Any]) -> str:
     """Erzeugt den Inhalt der hosts.txt für die angegebenen Domains."""
 
-    lines = [
-        f"{config_values['hosts_ip']} {domain}"
-        for domain in domains
-        if domain
-    ]
+    lines = [f"{config_values['hosts_ip']} {domain}" for domain in domains if domain]
     return "\n".join(lines).strip()
 
 
@@ -819,7 +832,9 @@ async def main(config_path: str | None = None, debug: bool = False):
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for url, result in zip(batch, results):
                     if isinstance(result, Exception):
-                        if isinstance(result, (aiohttp.ClientError, asyncio.TimeoutError)):
+                        if isinstance(
+                            result, (aiohttp.ClientError, asyncio.TimeoutError)
+                        ):
                             message = f"Netzwerkfehler bei {url}: {result}"
                             logger.warning(message)
                         else:
@@ -1018,15 +1033,8 @@ async def main(config_path: str | None = None, debug: bool = False):
             os.path.join(SCRIPT_DIR, CONFIG["hosts_file"]), "w", encoding="utf-8"
         ) as f:
             await f.write(hosts_content)
+        unreachable_domains = await deduplicate_unreachable_domains()
         if CONFIG["save_unreachable"] and os.path.exists(UNREACHABLE_FILE):
-            async with aiofiles.open(UNREACHABLE_FILE, "r", encoding="utf-8") as f:
-                unique_unreachable = dict.fromkeys(
-                    line.strip()
-                    async for line in f
-                    if line.strip()
-                )
-            unreachable_domains = sorted(unique_unreachable)
-            STATISTICS["unreachable_domains"] = len(unreachable_domains)
             async with aiofiles.open(
                 os.path.join(TMP_DIR, "unreachable.txt"), "w", encoding="utf-8"
             ) as f:
