@@ -3,7 +3,7 @@ from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 import subprocess
 from types import SimpleNamespace
 import time
@@ -147,6 +147,33 @@ def test_upload_to_github_skips_without_changes(monkeypatch):
 
     assert any(cmd[1] == "status" for cmd in calls)
     assert all(cmd[1] != "commit" for cmd in calls)
+
+
+def test_test_single_domain_async_skips_whitelist():
+    resolver = SimpleNamespace(query=AsyncMock())
+    cache_manager = MagicMock(
+        get_dns_cache=MagicMock(),
+        load_domain_cache=MagicMock(),
+        save_dns_cache=MagicMock(),
+        save_domain=MagicMock(),
+    )
+
+    result = asyncio.run(
+        networking.test_single_domain_async(
+            "whitelisted.example",
+            "https://example.com",
+            resolver,
+            cache_manager,
+            whitelist={"whitelisted.example"},
+            blacklist=set(),
+        )
+    )
+
+    assert result is True
+    resolver.query.assert_not_awaited()
+    cache_manager.get_dns_cache.assert_not_called()
+    cache_manager.save_dns_cache.assert_not_called()
+    cache_manager.save_domain.assert_not_called()
 
 
 def test_domain_batch_limits_concurrency():
