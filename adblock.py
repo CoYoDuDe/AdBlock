@@ -624,6 +624,30 @@ async def process_list(
         async with aiofiles.open(
             temp_file, "w", encoding="utf-8"
         ) as f_temp, aiofiles.open(filtered_file, "w", encoding="utf-8") as f_filtered:
+
+            async def flush_batch(reason: str | None = None) -> int:
+                nonlocal batch, unique_count, subdomain_count
+                if reason:
+                    logger.debug(reason)
+                if batch:
+                    for d in batch:
+                        if CONFIG["remove_redundant_subdomains"] and trie.has_parent(d):
+                            subdomain_count += 1
+                        else:
+                            await f_filtered.write(d + "\n")
+                            unique_count += 1
+                    await f_temp.write("\n".join(batch) + "\n")
+                    batch.clear()
+                trie.flush()
+                gc.collect()
+                new_free_memory = psutil.virtual_memory().available
+                logger.debug(
+                    "Batch verarbeitet%s, Speicher nach GC: %.2f MB",
+                    f" ({reason})" if reason else "",
+                    new_free_memory / (1024 * 1024),
+                )
+                return new_free_memory
+
             for domain in parse_domains(content, url):
                 domain_count += 1
                 free_memory = psutil.virtual_memory().available
@@ -642,28 +666,23 @@ async def process_list(
                         f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, pausiere Verarbeitung",
                         console=True,
                     )
-                    await asyncio.sleep(5)
+                    if batch:
+                        free_memory = await flush_batch(
+                            "Emergency-Flush wegen kritischem Speicher"
+                        )
+                    else:
+                        free_memory = await flush_batch(
+                            "Emergency-Flush ohne Batch-Inhalt"
+                        )
+                    config.global_mode = SystemMode.EMERGENCY
+                    batch_size = max(1, min(batch_size, 5))
                 if not trie.insert(domain):
                     duplicate_count += 1
                     continue
                 batch.append(domain)
                 if len(batch) >= batch_size:
-                    free_memory = psutil.virtual_memory().available
-                    logger.debug(
-                        f"Verarbeite Batch von {len(batch)} Domains, Speicher: {free_memory/(1024*1024):.2f} MB"
-                    )
-                    for d in batch:
-                        if CONFIG["remove_redundant_subdomains"] and trie.has_parent(d):
-                            subdomain_count += 1
-                        else:
-                            await f_filtered.write(d + "\n")
-                            unique_count += 1
-                    await f_temp.write("\n".join(batch) + "\n")
-                    batch = []
-                    trie.flush()
-                    gc.collect()
-                    logger.debug(
-                        f"Batch gespeichert, Speicher nach GC: {psutil.virtual_memory().available/(1024*1024):.2f} MB"
+                    await flush_batch(
+                        f"Regulärer Batch-Flush mit {len(batch)} Domains"
                     )
                 if domain_count % 1000 == 0:
                     memory = psutil.Process().memory_info().rss / (1024 * 1024)
@@ -673,21 +692,8 @@ async def process_list(
                     trie.flush()
                     gc.collect()
             if batch:
-                free_memory = psutil.virtual_memory().available
-                logger.debug(
-                    f"Verarbeite finalen Batch von {len(batch)} Domains, Speicher: {free_memory/(1024*1024):.2f} MB"
-                )
-                for d in batch:
-                    if CONFIG["remove_redundant_subdomains"] and trie.has_parent(d):
-                        subdomain_count += 1
-                    else:
-                        await f_filtered.write(d + "\n")
-                        unique_count += 1
-                await f_temp.write("\n".join(batch) + "\n")
-                gc.collect()
-                logger.debug(
-                    "Finaler Batch gespeichert, Speicher nach GC: "
-                    f"{psutil.virtual_memory().available/(1024*1024):.2f} MB"
+                await flush_batch(
+                    f"Finaler Batch-Flush mit {len(batch)} Domains"
                 )
         cache_manager.upsert_list_cache(
             url,
