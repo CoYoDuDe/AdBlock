@@ -592,3 +592,207 @@ def test_whitelist_domains_are_skipped_from_unreachable(monkeypatch, tmp_path):
         config_module.global_mode = original_global_mode
         adblock.config.cache_manager = original_cache_manager
         adblock.config.global_mode = original_global_mode
+
+
+def test_unique_domain_statistics_match_reachable_for_whitelist_only_lists(
+    monkeypatch, tmp_path
+):
+    tmp_dir = tmp_path / "tmp"
+    tmp_dir.mkdir()
+
+    reachable_path = tmp_dir / "reachable.txt"
+    unreachable_path = tmp_dir / "unreachable.txt"
+
+    original_statistics_ref = adblock.STATISTICS
+    original_statistics = copy.deepcopy(adblock.STATISTICS)
+    adblock.STATISTICS = copy.deepcopy(original_statistics)
+
+    original_config = config_module.CONFIG.copy()
+    original_adblock_config = adblock.CONFIG.copy()
+    original_global_mode = config_module.global_mode
+    original_cache_manager = config_module.cache_manager
+
+    whitelist_domain = "allowed.only"
+    sources = [
+        "https://example.com/list-a.txt",
+        "https://example.com/list-b.txt",
+    ]
+
+    monkeypatch.setattr(adblock, "SCRIPT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(adblock, "TMP_DIR", str(tmp_dir), raising=False)
+    monkeypatch.setattr(adblock, "REACHABLE_FILE", str(reachable_path), raising=False)
+    monkeypatch.setattr(adblock, "UNREACHABLE_FILE", str(unreachable_path), raising=False)
+
+    monkeypatch.setattr(config_module, "SCRIPT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config_module, "TMP_DIR", str(tmp_dir), raising=False)
+    monkeypatch.setattr(
+        config_module,
+        "REACHABLE_FILE",
+        adblock.REACHABLE_FILE,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        config_module,
+        "UNREACHABLE_FILE",
+        adblock.UNREACHABLE_FILE,
+        raising=False,
+    )
+
+    config_values = config_module.DEFAULT_CONFIG.copy()
+    config_values.update(
+        {
+            "github_upload": False,
+            "send_email": False,
+            "use_ipv4_output": False,
+            "use_ipv6_output": False,
+            "save_unreachable": False,
+            "export_prometheus": False,
+            "prioritize_lists": False,
+            "priority_lists": [],
+            "cache_flush_interval": 1,
+            "dns_servers": ["8.8.8.8"],
+        }
+    )
+
+    def fake_load_config(_config_path=None):
+        config_module.CONFIG.clear()
+        config_module.CONFIG.update(config_values)
+        adblock.CONFIG.clear()
+        adblock.CONFIG.update(config_values)
+
+    monkeypatch.setattr(adblock, "load_config", fake_load_config)
+    monkeypatch.setattr(adblock.config, "global_mode", adblock.SystemMode.NORMAL)
+    monkeypatch.setattr(config_module, "global_mode", adblock.SystemMode.NORMAL)
+
+    class DummyDomainCache:
+        def __init__(self):
+            self.use_ram = True
+
+        def update_threshold(self):
+            return None
+
+        def total_items(self):
+            return 0
+
+    class DummyCacheManager:
+        def __init__(self, *args, **kwargs):
+            self.config = config_values
+            self.domain_cache = DummyDomainCache()
+            self.current_cache_size = 4
+            self.flush_count = 0
+
+        async def flush_cache_periodically(self):
+            try:
+                while True:
+                    await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                raise
+
+        def adjust_cache_size(self):
+            return None
+
+        def save_domain_cache(self):
+            return False
+
+    async def fake_monitor_resources(*_args, **_kwargs):
+        try:
+            while True:
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            raise
+
+    async def fake_process_list(url, cache_manager, session):
+        filtered_path = tmp_dir / f"{adblock.sanitize_url_for_tmp(url)}.filtered"
+        async with aiofiles.open(filtered_path, "w", encoding="utf-8") as handle:
+            await handle.write(f"{whitelist_domain}\n")
+        return 1, 1, 0, 0
+
+    async def fake_test_domain_batch(*_args, **_kwargs):
+        return []
+
+    class DummySession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class DummyResolver:
+        pass
+
+    monkeypatch.setattr(adblock, "CacheManager", DummyCacheManager)
+    monkeypatch.setattr(adblock, "cleanup_temp_files", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(adblock, "monitor_resources", fake_monitor_resources)
+    monkeypatch.setattr(adblock, "initialize_directories_and_files", lambda: None)
+    monkeypatch.setattr(adblock, "process_list", fake_process_list)
+    monkeypatch.setattr(adblock, "test_domain_batch", fake_test_domain_batch)
+    monkeypatch.setattr(adblock, "load_hosts_sources", lambda *_: sources)
+    monkeypatch.setattr(
+        adblock,
+        "load_whitelist_blacklist",
+        lambda *_args: ({whitelist_domain}, set()),
+    )
+
+    async def fake_select_best_dns_server(*_args, **_kwargs):
+        return ["8.8.8.8"]
+
+    async def fake_is_ipv6_supported(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(adblock, "select_best_dns_server", fake_select_best_dns_server)
+    monkeypatch.setattr(adblock, "is_ipv6_supported", fake_is_ipv6_supported)
+    monkeypatch.setattr(adblock.aiohttp, "ClientSession", DummySession)
+    monkeypatch.setattr(
+        adblock.aiodns, "DNSResolver", lambda *args, **kwargs: DummyResolver()
+    )
+    monkeypatch.setattr(adblock, "send_email", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adblock, "upload_to_github", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adblock, "safe_save", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adblock, "export_statistics_csv", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adblock, "export_prometheus_metrics", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adblock, "evaluate_lists", lambda *args, **kwargs: None)
+    monkeypatch.setattr(adblock, "restart_dnsmasq", lambda *args, **kwargs: True)
+    monkeypatch.setattr(adblock, "get_system_resources", lambda: (2, 10, 1))
+    monkeypatch.setattr(
+        adblock.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=1_000_000_000),
+    )
+    monkeypatch.setattr(
+        adblock.psutil,
+        "Process",
+        lambda: SimpleNamespace(
+            memory_info=lambda: SimpleNamespace(rss=50 * 1024 * 1024)
+        ),
+    )
+
+    original_dns_cache = adblock.DNS_CACHE.copy()
+
+    async def run_main():
+        await adblock.main(config_path=str(tmp_path / "config.json"), debug=False)
+
+    try:
+        asyncio.run(run_main())
+        reachable_lines = []
+        if reachable_path.exists():
+            reachable_lines = [
+                line
+                for line in reachable_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        assert not reachable_lines
+        assert adblock.STATISTICS["unique_domains"] == len(reachable_lines) == 0
+    finally:
+        adblock.DNS_CACHE.clear()
+        adblock.DNS_CACHE.update(original_dns_cache)
+        adblock.STATISTICS = original_statistics_ref
+        adblock.STATISTICS.clear()
+        adblock.STATISTICS.update(original_statistics)
+        config_module.CONFIG.clear()
+        config_module.CONFIG.update(original_config)
+        adblock.CONFIG.clear()
+        adblock.CONFIG.update(original_adblock_config)
+        config_module.cache_manager = original_cache_manager
+        config_module.global_mode = original_global_mode
+        adblock.config.cache_manager = original_cache_manager
+        adblock.config.global_mode = original_global_mode
