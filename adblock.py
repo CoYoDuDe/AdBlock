@@ -591,7 +591,8 @@ async def process_list(
                     "duplicates",
                 )
             )
-            if cached_stats_available:
+            filtered_exists = os.path.exists(filtered_file)
+            if cached_stats_available and filtered_exists:
                 total_domains = int(cached_entry.get("total_domains", 0) or 0)
                 unique_domains = int(cached_entry.get("unique_domains", 0) or 0)
                 subdomain_count = int(cached_entry.get("subdomains", 0) or 0)
@@ -611,10 +612,17 @@ async def process_list(
                 STATISTICS["cache_hits"] += 1
                 logger.info(f"Liste {url} unverändert, verwende Cache")
                 return total_domains, unique_domains, subdomain_count, cached_duplicates
-            logger.debug(
-                "Cache-Eintrag für %s ohne vollständige Statistik, führe Verarbeitung erneut durch",
-                url,
-            )
+            if not cached_stats_available:
+                logger.debug(
+                    "Cache-Eintrag für %s ohne vollständige Statistik, führe Verarbeitung erneut durch",
+                    url,
+                )
+            elif not filtered_exists:
+                logger.debug(
+                    "Cache-Eintrag für %s vorhanden, aber gefilterte Datei %s fehlt – verarbeite Liste erneut",
+                    url,
+                    filtered_file,
+                )
         trie = DomainTrie(url, cache_manager.config)
         domain_count = 0
         unique_count = 0
