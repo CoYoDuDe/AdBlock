@@ -916,13 +916,17 @@ async def main(config_path: str | None = None, debug: bool = False):
                 async with aiofiles.open(filtered_file, "r", encoding="utf-8") as f:
                     async for line in f:
                         domain = line.strip()
-                        if domain:
-                            global_unique_domains.add(domain)
-                            free_memory = psutil.virtual_memory().available
-                            config.cache_manager.domain_cache.update_threshold()
-                            _, batch_size, max_concurrent_dns = get_system_resources()
-                            domains.append(domain)
-                            if len(domains) >= batch_size:
+                        if not domain:
+                            continue
+                        domain_lower = domain.lower()
+                        if domain_lower in whitelist:
+                            continue
+                        global_unique_domains.add(domain)
+                        free_memory = psutil.virtual_memory().available
+                        config.cache_manager.domain_cache.update_threshold()
+                        _, batch_size, max_concurrent_dns = get_system_resources()
+                        domains.append(domain)
+                        if len(domains) >= batch_size:
                                 results = await test_domain_batch(
                                     domains,
                                     url,
@@ -936,6 +940,9 @@ async def main(config_path: str | None = None, debug: bool = False):
                                     CONFIG,
                                 )
                                 for domain, reachable in results:
+                                    domain_lower = domain.lower()
+                                    if domain_lower in whitelist:
+                                        continue
                                     if not isinstance(reachable, bool):
                                         logger.error(
                                             f"Ungültiges Ergebnis für Domain {domain}: {reachable}"
@@ -990,6 +997,9 @@ async def main(config_path: str | None = None, debug: bool = False):
                             CONFIG,
                         )
                         for domain, reachable in results:
+                            domain_lower = domain.lower()
+                            if domain_lower in whitelist:
+                                continue
                             if not isinstance(reachable, bool):
                                 logger.error(
                                     f"Ungültiges Ergebnis für Domain {domain}: {reachable}"
