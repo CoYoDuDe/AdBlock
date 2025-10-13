@@ -927,62 +927,58 @@ async def main(config_path: str | None = None, debug: bool = False):
                         _, batch_size, max_concurrent_dns = get_system_resources()
                         domains.append(domain)
                         if len(domains) >= batch_size:
-                                results = await test_domain_batch(
-                                    domains,
-                                    url,
-                                    resolver,
-                                    config.cache_manager,
-                                    whitelist,
-                                    blacklist,
-                                    DNS_CACHE,
-                                    dns_cache_lock,
-                                    max_concurrent_dns,
-                                    CONFIG,
-                                )
-                                for domain, reachable in results:
-                                    domain_lower = domain.lower()
-                                    if domain_lower in whitelist:
-                                        continue
-                                    if not isinstance(reachable, bool):
-                                        logger.error(
-                                            f"Ungültiges Ergebnis für Domain {domain}: {reachable}"
-                                        )
-                                        continue
-                                    if reachable:
-                                        await f_reachable.write(domain + "\n")
-                                        STATISTICS["reachable_domains"] += 1
-                                        stats_entry["reachable"] += 1
-                                    else:
-                                        await f_unreachable.write(domain + "\n")
-                                        STATISTICS["unreachable_domains"] += 1
-                                        stats_entry["unreachable"] += 1
-                                domains = []
-                                memory = psutil.Process().memory_info().rss / (
-                                    1024 * 1024
-                                )
-                                logger.debug(
-                                    f"Speicherverbrauch nach Batch ({url}): {memory:.2f} MB"
-                                )
-                                gc.collect()
-                                if (
-                                    free_memory
-                                    < CONFIG["resource_thresholds"][
-                                        "emergency_memory_mb"
-                                    ]
-                                    * 1024
-                                    * 1024
-                                ):
-                                    log_once(
-                                        logging.WARNING,
-                                        f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, "
-                                        f"reduziere Cache",
-                                        console=True,
+                            results = await test_domain_batch(
+                                domains,
+                                url,
+                                resolver,
+                                config.cache_manager,
+                                whitelist,
+                                blacklist,
+                                DNS_CACHE,
+                                dns_cache_lock,
+                                max_concurrent_dns,
+                                CONFIG,
+                            )
+                            for domain, reachable in results:
+                                domain_lower = domain.lower()
+                                if domain_lower in whitelist:
+                                    continue
+                                if not isinstance(reachable, bool):
+                                    logger.error(
+                                        f"Ungültiges Ergebnis für Domain {domain}: {reachable}"
                                     )
-                                    config.cache_manager.current_cache_size = max(
-                                        2, config.cache_manager.current_cache_size // 2
-                                    )
-                                    config.cache_manager.adjust_cache_size()
-                                    config.cache_manager.domain_cache.use_ram = False
+                                    continue
+                                if reachable:
+                                    await f_reachable.write(domain + "\n")
+                                    STATISTICS["reachable_domains"] += 1
+                                    stats_entry["reachable"] += 1
+                                else:
+                                    await f_unreachable.write(domain + "\n")
+                                    STATISTICS["unreachable_domains"] += 1
+                                    stats_entry["unreachable"] += 1
+                            domains = []
+                            memory = psutil.Process().memory_info().rss / (1024 * 1024)
+                            logger.debug(
+                                f"Speicherverbrauch nach Batch ({url}): {memory:.2f} MB"
+                            )
+                            gc.collect()
+                            if (
+                                free_memory
+                                < CONFIG["resource_thresholds"]["emergency_memory_mb"]
+                                * 1024
+                                * 1024
+                            ):
+                                log_once(
+                                    logging.WARNING,
+                                    f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, "
+                                    f"reduziere Cache",
+                                    console=True,
+                                )
+                                config.cache_manager.current_cache_size = max(
+                                    2, config.cache_manager.current_cache_size // 2
+                                )
+                                config.cache_manager.adjust_cache_size()
+                                config.cache_manager.domain_cache.use_ram = False
                     if domains:
                         results = await test_domain_batch(
                             domains,
@@ -1013,6 +1009,37 @@ async def main(config_path: str | None = None, debug: bool = False):
                                 await f_unreachable.write(domain + "\n")
                                 STATISTICS["unreachable_domains"] += 1
                                 stats_entry["unreachable"] += 1
+        existing_domain_lowers = {domain.lower() for domain in global_unique_domains}
+        blacklist_domains_to_add: list[str] = []
+        for domain in sorted(blacklist):
+            if not domain:
+                continue
+            if domain in whitelist:
+                continue
+            if domain.lower() in existing_domain_lowers:
+                continue
+            blacklist_domains_to_add.append(domain)
+            existing_domain_lowers.add(domain.lower())
+        if blacklist_domains_to_add:
+            async with aiofiles.open(
+                REACHABLE_FILE, "a", encoding="utf-8"
+            ) as blacklist_handle:
+                for domain in blacklist_domains_to_add:
+                    await blacklist_handle.write(domain + "\n")
+                    global_unique_domains.add(domain)
+            additional_blacklist_count = len(blacklist_domains_to_add)
+            STATISTICS["reachable_domains"] += additional_blacklist_count
+            blacklist_stats_entry = ensure_list_stats_entry("blacklist.txt")
+            blacklist_stats_entry["total"] += additional_blacklist_count
+            blacklist_stats_entry["unique"] += additional_blacklist_count
+            blacklist_stats_entry["reachable"] += additional_blacklist_count
+            blacklist_stats_entry["duplicates"] = max(
+                blacklist_stats_entry["total"]
+                - blacklist_stats_entry["unique"]
+                - blacklist_stats_entry.get("subdomains", 0),
+                0,
+            )
+            STATISTICS["unique_domains"] = len(global_unique_domains)
         STATISTICS["unique_domains"] = calculate_unique_domains(
             url_counts, global_unique_domains
         )
