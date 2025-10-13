@@ -671,7 +671,11 @@ async def process_list(
                 ):
                     log_once(
                         logging.WARNING,
-                        f"Kritischer Speicherstand: {free_memory/(1024*1024):.2f} MB frei, pausiere Verarbeitung",
+                        (
+                            "Kritischer Speicherstand: %s MB frei, leere Batch und aktiviere "
+                            "Emergency-Mode"
+                        )
+                        % (free_memory / (1024 * 1024)),
                         console=True,
                     )
                     if batch:
@@ -682,8 +686,27 @@ async def process_list(
                         free_memory = await flush_batch(
                             "Emergency-Flush ohne Batch-Inhalt"
                         )
+                    previous_mode = config.global_mode
                     config.global_mode = SystemMode.EMERGENCY
                     batch_size = max(1, min(batch_size, 5))
+                    if previous_mode != SystemMode.EMERGENCY:
+                        logger.warning(
+                            "Schalte in den Emergency-Mode um und reduziere Batch-Größe auf %s",
+                            batch_size,
+                        )
+                    else:
+                        logger.debug(
+                            "Emergency-Mode bleibt aktiv, Batch-Größe auf %s begrenzt",
+                            batch_size,
+                        )
+                    if (
+                        free_memory
+                        < CONFIG["resource_thresholds"]["emergency_memory_mb"] * 1024 * 1024
+                    ):
+                        logger.debug(
+                            "Speicher nach Emergency-Flush weiterhin kritisch: %.2f MB",
+                            free_memory / (1024 * 1024),
+                        )
                 if not trie.insert(domain):
                     duplicate_count += 1
                     continue
