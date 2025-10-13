@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import logging
 import os
 import subprocess
 import sys
@@ -218,6 +219,104 @@ def test_process_list_cache_reuses_statistics(monkeypatch, tmp_path):
             assert result_second == result_first
             assert adblock.STATISTICS["duplicates"] == duplicates_after_first
             assert adblock.STATISTICS["cache_hits"] == 1
+        finally:
+            config_module.CONFIG.clear()
+            config_module.CONFIG.update(original_config)
+            adblock.CONFIG.clear()
+            adblock.CONFIG.update(original_adblock_config)
+            adblock.STATISTICS["duplicates"] = original_duplicates
+            adblock.STATISTICS["cache_hits"] = original_cache_hits
+            adblock.STATISTICS["domain_sources"] = original_domain_sources
+
+    asyncio.run(run_test())
+
+
+def test_process_list_recreates_filtered_file_when_missing(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(adblock, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
+    monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie_cache.pkl"))
+    monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
+
+    os.makedirs(adblock.TMP_DIR, exist_ok=True)
+
+    config_values = config_module.DEFAULT_CONFIG.copy()
+    config_values["use_bloom_filter"] = False
+    config_values["remove_redundant_subdomains"] = True
+    original_config = config_module.CONFIG.copy()
+    original_adblock_config = adblock.CONFIG.copy()
+    config_module.CONFIG.clear()
+    config_module.CONFIG.update(config_values)
+    adblock.CONFIG.clear()
+    adblock.CONFIG.update(config_values)
+    monkeypatch.setattr(adblock.config, "global_mode", adblock.SystemMode.NORMAL)
+
+    monkeypatch.setattr(adblock, "get_system_resources", lambda: (10, 10, 10))
+    monkeypatch.setattr(
+        adblock.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=1_000_000_000),
+    )
+    monkeypatch.setattr(
+        adblock.psutil,
+        "Process",
+        lambda: SimpleNamespace(
+            memory_info=lambda: SimpleNamespace(rss=50 * 1024 * 1024)
+        ),
+    )
+
+    domains = [
+        "example.com",
+        "duplicate.example.com",
+        "duplicate.example.com",
+        "sub.example.com",
+        "unique.com",
+    ]
+
+    def fake_parse_domains(content: str, url: str):
+        for domain in domains:
+            yield domain
+
+    monkeypatch.setattr(adblock, "parse_domains", fake_parse_domains)
+
+    cache_manager = caching.CacheManager(
+        str(tmp_path / "cache.db"), flush_interval=1, config=config_values
+    )
+
+    url = "https://example.com/list.txt"
+    filtered_path = Path(adblock.TMP_DIR) / f"{adblock.sanitize_url_for_tmp(url)}.filtered"
+    original_duplicates = adblock.STATISTICS.get("duplicates", 0)
+    original_cache_hits = adblock.STATISTICS.get("cache_hits", 0)
+    original_domain_sources = adblock.STATISTICS["domain_sources"].copy()
+    adblock.STATISTICS["duplicates"] = 0
+    adblock.STATISTICS["cache_hits"] = 0
+    adblock.STATISTICS["domain_sources"] = {}
+
+    async def run_test():
+        try:
+            result_first = await adblock.process_list(
+                url, cache_manager, FakeSession("data")
+            )
+
+            assert filtered_path.exists()
+            filtered_path.unlink()
+            assert not filtered_path.exists()
+
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG, logger=adblock.logger.name):
+                result_second = await adblock.process_list(
+                    url, cache_manager, FakeSession("data")
+                )
+
+            assert filtered_path.exists()
+            assert result_second[0] == len(domains)
+            assert (
+                result_second[1] + result_second[2] + result_second[3]
+                == result_second[0]
+            )
+            assert any(
+                "gefilterte Datei" in message for message in caplog.messages
+            ), "Fallback-Logeintrag fehlt"
+            assert adblock.STATISTICS["cache_hits"] == 0
         finally:
             config_module.CONFIG.clear()
             config_module.CONFIG.update(original_config)
