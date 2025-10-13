@@ -83,6 +83,17 @@ class DummyCacheManager:
         return None
 
 
+class EmergencyTestCacheManager:
+    def __init__(self, config):
+        self.config = config
+
+    def get_list_cache_entry(self, url):
+        return None
+
+    def upsert_list_cache(self, *args, **kwargs):
+        return None
+
+
 def test_get_system_resources_uses_non_blocking_cpu_percent(monkeypatch):
     intervals = []
 
@@ -229,6 +240,125 @@ def test_process_list_cache_reuses_statistics(monkeypatch, tmp_path):
             adblock.STATISTICS["domain_sources"] = original_domain_sources
 
     asyncio.run(run_test())
+
+
+def test_process_list_enters_emergency_mode_and_flushes(monkeypatch, tmp_path):
+    monkeypatch.setattr(adblock, "TMP_DIR", str(tmp_path), raising=False)
+    os.makedirs(adblock.TMP_DIR, exist_ok=True)
+
+    config_values = config_module.DEFAULT_CONFIG.copy()
+    config_values["use_bloom_filter"] = False
+    config_values["remove_redundant_subdomains"] = False
+    config_values["resource_thresholds"] = config_values["resource_thresholds"].copy()
+
+    test_config = config_values.copy()
+    monkeypatch.setattr(config_module, "CONFIG", test_config.copy(), raising=False)
+    monkeypatch.setattr(adblock, "CONFIG", test_config.copy(), raising=False)
+    monkeypatch.setattr(adblock.config, "global_mode", adblock.SystemMode.NORMAL, raising=False)
+    monkeypatch.setattr(config_module, "global_mode", adblock.SystemMode.NORMAL, raising=False)
+
+    memory_values_mb = [80, 40, 120, 120, 120]
+    call_index = {"value": 0}
+
+    def fake_virtual_memory():
+        value_mb = memory_values_mb[min(call_index["value"], len(memory_values_mb) - 1)]
+        call_index["value"] += 1
+        return SimpleNamespace(available=value_mb * 1024 * 1024)
+
+    monkeypatch.setattr(adblock.psutil, "virtual_memory", fake_virtual_memory, raising=False)
+    monkeypatch.setattr(
+        adblock.psutil,
+        "Process",
+        lambda: SimpleNamespace(
+            memory_info=lambda: SimpleNamespace(rss=25 * 1024 * 1024)
+        ),
+        raising=False,
+    )
+
+    monkeypatch.setattr(adblock, "get_system_resources", lambda: (1, 50, 1), raising=False)
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(adblock.asyncio, "sleep", fake_sleep, raising=False)
+
+    gc_calls: list[None] = []
+
+    def fake_collect() -> int:
+        gc_calls.append(None)
+        return 0
+
+    monkeypatch.setattr(adblock.gc, "collect", fake_collect, raising=False)
+
+    class RecordingTrie:
+        def __init__(self, url: str, cfg: dict):
+            self.url = url
+            self.config = cfg
+            self.storage = SimpleNamespace(update_threshold=lambda: None)
+            self.flush_count = 0
+            self.inserted: list[str] = []
+
+        def has_parent(self, domain: str) -> bool:
+            return False
+
+        def insert(self, domain: str) -> bool:
+            self.inserted.append(domain)
+            return True
+
+        def flush(self) -> None:
+            self.flush_count += 1
+
+        def close(self) -> None:
+            return None
+
+    created_tries: list[RecordingTrie] = []
+
+    def fake_trie(url: str, cfg: dict) -> RecordingTrie:
+        trie = RecordingTrie(url, cfg)
+        created_tries.append(trie)
+        return trie
+
+    monkeypatch.setattr(adblock, "DomainTrie", fake_trie, raising=False)
+
+    domains = ["emergency.example", "next.example"]
+
+    def fake_parse_domains(content: str, url: str):
+        yield from domains
+
+    monkeypatch.setattr(adblock, "parse_domains", fake_parse_domains, raising=False)
+
+    cache_manager = EmergencyTestCacheManager(test_config)
+
+    session = FakeSession("dummy-content")
+    url = "https://example.com/emergency.txt"
+    results: dict[str, tuple[int, int, int, int]] = {}
+
+    async def run_test() -> None:
+        results["stats"] = await adblock.process_list(url, cache_manager, session)
+
+    asyncio.run(run_test())
+
+    result = results["stats"]
+    assert result[0] == len(domains)
+    assert created_tries, "DomainTrie sollte instanziiert werden"
+    trie = created_tries[0]
+    assert trie.flush_count >= 2
+    assert trie.inserted == domains
+    assert adblock.config.global_mode == adblock.SystemMode.EMERGENCY
+    assert sleep_calls == []
+    assert len(gc_calls) >= 2
+
+    sanitized = adblock.sanitize_url_for_tmp(url)
+    filtered_path = Path(adblock.TMP_DIR) / f"{sanitized}.filtered"
+    assert filtered_path.exists()
+    filtered_lines = [
+        line.strip()
+        for line in filtered_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert filtered_lines == domains
 
 
 def test_process_list_recreates_filtered_file_when_missing(monkeypatch, tmp_path, caplog):
