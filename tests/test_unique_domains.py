@@ -13,10 +13,10 @@ def test_calculate_unique_domains_prefers_global_set_for_duplicates():
     assert calculate_unique_domains(url_counts, global_unique_domains) == 3
 
 
-def test_calculate_unique_domains_fallback_when_set_empty():
+def test_calculate_unique_domains_returns_zero_when_set_empty():
     url_counts = {
         "https://example.com/list1": {"unique": 5},
         "https://example.com/list2": {"unique": 3},
     }
 
-    assert calculate_unique_domains(url_counts, set()) == 8
+    assert calculate_unique_domains(url_counts, set()) == 0

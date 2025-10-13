@@ -143,6 +143,10 @@ def calculate_unique_domains(
 
     if global_unique_domains:
         return len(global_unique_domains)
+    if any(counts.get("unique", 0) for counts in url_counts.values()):
+        # Alle potentiellen Domains wurden herausgefiltert (z. B. durch die Whitelist)
+        # und tauchen daher nicht in den exportierten Ergebnissen auf.
+        return 0
     return sum(counts.get("unique", 0) for counts in url_counts.values())
 
 
@@ -883,10 +887,6 @@ async def main(config_path: str | None = None, debug: bool = False):
         STATISTICS["total_domains"] = sum(
             counts["total"] for counts in url_counts.values()
         )
-        STATISTICS["unique_domains"] = calculate_unique_domains(
-            url_counts, global_unique_domains
-        )
-        logger.debug("Statistiken berechnet")
         max_jobs, batch_size, max_concurrent_dns = get_system_resources()
         if os.path.exists(REACHABLE_FILE):
             os.remove(REACHABLE_FILE)
@@ -1013,6 +1013,10 @@ async def main(config_path: str | None = None, debug: bool = False):
                                 await f_unreachable.write(domain + "\n")
                                 STATISTICS["unreachable_domains"] += 1
                                 stats_entry["unreachable"] += 1
+        STATISTICS["unique_domains"] = calculate_unique_domains(
+            url_counts, global_unique_domains
+        )
+        logger.debug("Statistiken berechnet")
         evaluate_lists(STATISTICS, CONFIG)
         logger.debug("Listen bewertet")
         sorted_domains = await load_sorted_domains_with_statistics(REACHABLE_FILE)
