@@ -133,7 +133,7 @@ async def test_single_domain_async(
     config: dict | None = None,
 ) -> bool:
     if domain in whitelist:
-        return False
+        return True
     if domain in blacklist:
         return True
     active_config = config or CONFIG or DEFAULT_CONFIG
