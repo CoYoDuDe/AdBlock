@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections import deque
 from typing import Optional, Tuple
@@ -106,7 +107,9 @@ async def monitor_resources(cache_manager, config: dict) -> None:
             latency = await check_network_latency(config)
             history["free_memory_mb"].append(free_memory)
             history["cpu_usage_percent"].append(cpu_usage)
-            history["latency_s"].append(latency if latency != float("inf") else 5.0)
+            history["latency_s"].append(
+                latency if not math.isinf(latency) else math.inf
+            )
 
             sample_count = len(history["cpu_usage_percent"])
             avg_free_memory = moving_average(history["free_memory_mb"])
