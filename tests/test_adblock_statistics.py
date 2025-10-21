@@ -474,6 +474,88 @@ def test_monitor_resources_detects_dns_failure_with_high_latency_threshold(
     assert any("DNS-Latenz" in message for message in caplog.messages)
 
 
+def test_monitor_resources_handles_primary_dns_failure(monkeypatch, caplog):
+    cache_manager = MonitoringTestCacheManager()
+    config_values = config_module.DEFAULT_CONFIG.copy()
+    config_values["resource_thresholds"] = (
+        config_values["resource_thresholds"].copy()
+    )
+    config_values["resource_thresholds"].update(
+        moving_average_window=3,
+        consecutive_violations=2,
+        high_cpu_percent=95,
+        high_latency_s=5.0,
+        low_memory_mb=128,
+        emergency_memory_mb=64,
+    )
+    config_values["dns_servers"] = [
+        "198.51.100.10",
+        "198.51.100.11",
+    ]
+    config_values["send_email"] = True
+
+    failing_server = config_values["dns_servers"][0]
+    fallback_server = config_values["dns_servers"][1]
+
+    attempts: dict[str, int] = {}
+    select_calls: list[tuple[tuple[str, ...], float]] = []
+    email_calls: list[tuple[str, str, dict]] = []
+
+    async def fake_select_best_dns_server(servers, timeout=5.0):
+        select_calls.append((tuple(servers), timeout))
+        return list(servers)
+
+    class FakeResolver:
+        def __init__(self, nameservers, timeout):
+            self.server = nameservers[0]
+            self.timeout = timeout
+
+        async def query(self, domain, record):
+            attempts[self.server] = attempts.get(self.server, 0) + 1
+            if self.server == failing_server:
+                raise RuntimeError("resolver down")
+            return [{"host": "93.184.216.34"}]
+
+    def fake_virtual_memory():
+        return SimpleNamespace(available=1_024 * 1_024 * 1_024)
+
+    def fake_cpu_percent(interval=None):
+        return 12.0
+
+    async def fake_sleep(_seconds):
+        fake_sleep.counter += 1
+        if fake_sleep.counter >= 3:
+            raise asyncio.CancelledError
+
+    fake_sleep.counter = 0
+
+    def fake_send_email(subject: str, body: str, cfg: dict) -> None:
+        email_calls.append((subject, body, cfg))
+
+    monkeypatch.setattr(
+        monitoring, "select_best_dns_server", fake_select_best_dns_server
+    )
+    monkeypatch.setattr(monitoring.aiodns, "DNSResolver", FakeResolver)
+    monkeypatch.setattr(monitoring.psutil, "virtual_memory", fake_virtual_memory)
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", fake_cpu_percent)
+    monkeypatch.setattr(monitoring.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(monitoring, "send_email", fake_send_email)
+    monkeypatch.setattr(
+        config_module, "global_mode", adblock.SystemMode.NORMAL, raising=False
+    )
+
+    caplog.set_level(logging.INFO, logger=monitoring.logger.name)
+    asyncio.run(monitoring.monitor_resources(cache_manager, config_values))
+
+    assert attempts.get(failing_server, 0) >= 1
+    assert attempts.get(fallback_server, 0) >= 1
+    assert select_calls
+    assert not email_calls
+    assert config_module.global_mode == adblock.SystemMode.NORMAL
+    assert fake_sleep.counter >= 3
+    assert not any("DNS-Latenz" in message for message in caplog.messages)
+
+
 def test_monitor_resources_enters_low_memory_mode(monkeypatch, caplog):
     cache_manager = MonitoringTestCacheManager()
     config_values = config_module.DEFAULT_CONFIG.copy()
