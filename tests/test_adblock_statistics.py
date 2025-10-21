@@ -118,6 +118,87 @@ def test_log_once_ignores_suppressed_level_until_logger_allows(monkeypatch):
         logger.propagate = original_propagate
 
 
+def test_log_once_respects_filters_and_parent_handlers(monkeypatch):
+    child_records: list[str] = []
+    parent_records: list[str] = []
+
+    class ChildHandler(logging.Handler):
+        def emit(self, record):
+            child_records.append(record.getMessage())
+
+    class ParentHandler(logging.Handler):
+        def emit(self, record):
+            parent_records.append(record.getMessage())
+
+    class BlockFilter(logging.Filter):
+        def filter(self, record):
+            return "blocked" not in record.getMessage()
+
+    logger = adblock.logger
+    parent_logger = logging.getLogger("adblock.test_parent")
+
+    original_handlers = list(logger.handlers)
+    original_filters = list(logger.filters)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    original_parent = logger.parent
+
+    original_parent_handlers = list(parent_logger.handlers)
+    original_parent_filters = list(parent_logger.filters)
+    original_parent_level = parent_logger.level
+    original_parent_propagate = parent_logger.propagate
+
+    child_handler = ChildHandler(level=logging.INFO)
+    parent_handler = ParentHandler(level=logging.INFO)
+
+    parent_logger.handlers = [parent_handler]
+    parent_logger.filters = []
+    parent_logger.setLevel(logging.INFO)
+    parent_logger.propagate = False
+
+    logger.handlers = [child_handler]
+    logger.filters = []
+    logger.addFilter(BlockFilter())
+    logger.setLevel(logging.INFO)
+    logger.propagate = True
+    logger.parent = parent_logger
+
+    monkeypatch.setattr(adblock, "logged_messages", set())
+    monkeypatch.setattr(adblock, "console_logged_messages", set())
+    monkeypatch.setattr(config_module, "logged_messages", adblock.logged_messages)
+    monkeypatch.setattr(
+        config_module,
+        "console_logged_messages",
+        adblock.console_logged_messages,
+    )
+
+    try:
+        adblock.log_once(logging.INFO, "blocked message")
+
+        assert child_records == []
+        assert parent_records == []
+        assert not adblock.logged_messages
+        assert not adblock.console_logged_messages
+
+        adblock.log_once(logging.INFO, "allowed message")
+
+        assert child_records == ["allowed message"]
+        assert parent_records == ["allowed message"]
+        assert adblock.logged_messages == {"allowed message"}
+        assert not adblock.console_logged_messages
+    finally:
+        logger.handlers = original_handlers
+        logger.filters = original_filters
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+        logger.parent = original_parent
+
+        parent_logger.handlers = original_parent_handlers
+        parent_logger.filters = original_parent_filters
+        parent_logger.setLevel(original_parent_level)
+        parent_logger.propagate = original_parent_propagate
+
+
 def test_ensure_list_stats_entry_initializes_and_updates(monkeypatch):
     stats_store = defaultdict(adblock.create_default_list_stats_entry)
     monkeypatch.setitem(adblock.STATISTICS, "list_stats", stats_store)
