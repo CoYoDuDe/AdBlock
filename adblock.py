@@ -108,6 +108,8 @@ def _dispatch_to_handlers(
     dispatched = False
     fn, lineno, func_name = caller
     for handler in handlers:
+        if level < handler.level:
+            continue
         record = logger.makeRecord(
             logger.name,
             level,
@@ -118,8 +120,8 @@ def _dispatch_to_handlers(
             exc_info=None,
             func=func_name,
         )
-        handler.handle(record)
-        dispatched = True
+        if handler.handle(record):
+            dispatched = True
     return dispatched
 
 
@@ -130,12 +132,7 @@ def log_once(level, message, console=True):
     if not (log_to_file or log_to_console):
         return
 
-    if log_to_file:
-        logged_messages.add(message)
-    if log_to_console:
-        console_logged_messages.add(message)
-
-    if level < logger.getEffectiveLevel():
+    if not logger.isEnabledFor(level):
         return
 
     console_handlers: list[logging.Handler] = []
@@ -153,26 +150,32 @@ def log_once(level, message, console=True):
     except ValueError:
         caller_fn, caller_lineno, caller_func = __file__, 0, log_once.__name__
 
-    dispatched = False
+    file_dispatched = False
+    console_dispatched = False
 
     if log_to_file and other_handlers:
-        dispatched = _dispatch_to_handlers(
+        file_dispatched = _dispatch_to_handlers(
             level, message, other_handlers, (caller_fn, caller_lineno, caller_func)
         )
+        if file_dispatched:
+            logged_messages.add(message)
 
     if log_to_console and console_handlers:
-        dispatched = (
-            _dispatch_to_handlers(
-                level,
-                message,
-                console_handlers,
-                (caller_fn, caller_lineno, caller_func),
-            )
-            or dispatched
+        console_dispatched = _dispatch_to_handlers(
+            level,
+            message,
+            console_handlers,
+            (caller_fn, caller_lineno, caller_func),
         )
+        if console_dispatched:
+            console_logged_messages.add(message)
 
-    if not dispatched and not logger.handlers:
+    if not logger.handlers:
         logger.log(level, message)
+        if log_to_file:
+            logged_messages.add(message)
+        if log_to_console:
+            console_logged_messages.add(message)
 
 
 def create_default_list_stats_entry() -> Dict[str, Any]:
