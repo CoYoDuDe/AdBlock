@@ -13,7 +13,7 @@ import aiodns
 import psutil
 
 import config as config_module
-from networking import send_email
+from networking import select_best_dns_server, send_email
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +22,37 @@ _RESOURCE_CACHE: Optional[Tuple[float, Tuple[int, int, int]]] = None
 
 
 async def check_network_latency(config: dict) -> float:
+    """Ermittle die DNS-Latenz über alle konfigurierten Resolver."""
+
+    # Hinweis: Wir verwenden dieselbe Vorauswahl wie der Hauptprozess, damit
+    # Monitoring und Produktionspfad identische DNS-Pfade bewerten und keine
+    # widersprüchlichen Gesundheitsalarme erzeugen.
+    dns_servers = list(
+        config.get("dns_servers")
+        or config_module.DEFAULT_CONFIG.get("dns_servers", [])
+    )
+    if not dns_servers:
+        return math.inf
+
+    timeout = float(
+        config.get("domain_timeout", config_module.DEFAULT_CONFIG.get("domain_timeout", 5.0))
+    )
     try:
-        resolver = aiodns.DNSResolver(
-            nameservers=[config["dns_servers"][0]], timeout=5.0
-        )
-        start = asyncio.get_running_loop().time()
-        await resolver.query("example.com", "A")
-        latency = asyncio.get_running_loop().time() - start
-        return latency
+        ordered_servers = await select_best_dns_server(dns_servers, timeout=timeout)
     except Exception:
-        return float("inf")
+        ordered_servers = dns_servers
+
+    loop = asyncio.get_running_loop()
+    for server in ordered_servers:
+        try:
+            resolver = aiodns.DNSResolver(nameservers=[server], timeout=timeout)
+            start = loop.time()
+            await resolver.query("example.com", "A")
+            return loop.time() - start
+        except Exception:
+            logger.debug("DNS-Server %s reagiert nicht auf Latenztest", server)
+
+    return math.inf
 
 
 def get_system_resources() -> Tuple[int, int, int]:
