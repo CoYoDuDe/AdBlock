@@ -90,16 +90,89 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(args)
 
 
+def _is_console_handler(handler: logging.Handler) -> bool:
+    if not isinstance(handler, logging.StreamHandler):
+        return False
+    stream = getattr(handler, "stream", None)
+    stdout = getattr(sys, "stdout", None)
+    stderr = getattr(sys, "stderr", None)
+    return stream is stdout or stream is stderr
+
+
+def _dispatch_to_handlers(
+    level: int,
+    message: str,
+    handlers: Sequence[logging.Handler],
+    caller: tuple[str, int, str],
+) -> bool:
+    dispatched = False
+    fn, lineno, func_name = caller
+    for handler in handlers:
+        record = logger.makeRecord(
+            logger.name,
+            level,
+            fn,
+            lineno,
+            message,
+            args=(),
+            exc_info=None,
+            func=func_name,
+        )
+        handler.handle(record)
+        dispatched = True
+    return dispatched
+
+
 def log_once(level, message, console=True):
-    if message not in logged_messages:
-        logger.log(level, message)
+    log_to_file = message not in logged_messages
+    log_to_console = console and message not in console_logged_messages
+
+    if not (log_to_file or log_to_console):
+        return
+
+    if log_to_file:
         logged_messages.add(message)
-    if console and message not in console_logged_messages:
-        if level >= logging.ERROR:
-            logger.error(message)
-        else:
-            logger.info(message)
+    if log_to_console:
         console_logged_messages.add(message)
+
+    if level < logger.getEffectiveLevel():
+        return
+
+    console_handlers: list[logging.Handler] = []
+    other_handlers: list[logging.Handler] = []
+    for handler in logger.handlers:
+        if _is_console_handler(handler):
+            console_handlers.append(handler)
+        else:
+            other_handlers.append(handler)
+
+    try:
+        caller_fn, caller_lineno, caller_func, _ = logger.findCaller(
+            stack_info=False, stacklevel=3
+        )
+    except ValueError:
+        caller_fn, caller_lineno, caller_func = __file__, 0, log_once.__name__
+
+    dispatched = False
+
+    if log_to_file and other_handlers:
+        dispatched = _dispatch_to_handlers(
+            level, message, other_handlers, (caller_fn, caller_lineno, caller_func)
+        )
+
+    if log_to_console and console_handlers:
+        dispatched = (
+            _dispatch_to_handlers(
+                level,
+                message,
+                console_handlers,
+                (caller_fn, caller_lineno, caller_func),
+            )
+            or dispatched
+        )
+
+    if not dispatched and not logger.handlers:
+        logger.log(level, message)
 
 
 def create_default_list_stats_entry() -> Dict[str, Any]:
@@ -701,7 +774,9 @@ async def process_list(
                         )
                     if (
                         free_memory
-                        < CONFIG["resource_thresholds"]["emergency_memory_mb"] * 1024 * 1024
+                        < CONFIG["resource_thresholds"]["emergency_memory_mb"]
+                        * 1024
+                        * 1024
                     ):
                         logger.debug(
                             "Speicher nach Emergency-Flush weiterhin kritisch: %.2f MB",
@@ -712,9 +787,7 @@ async def process_list(
                     continue
                 batch.append(domain)
                 if len(batch) >= batch_size:
-                    await flush_batch(
-                        f"Regulärer Batch-Flush mit {len(batch)} Domains"
-                    )
+                    await flush_batch(f"Regulärer Batch-Flush mit {len(batch)} Domains")
                 if domain_count % 1000 == 0:
                     memory = psutil.Process().memory_info().rss / (1024 * 1024)
                     logger.debug(
@@ -723,9 +796,7 @@ async def process_list(
                     trie.flush()
                     gc.collect()
             if batch:
-                await flush_batch(
-                    f"Finaler Batch-Flush mit {len(batch)} Domains"
-                )
+                await flush_batch(f"Finaler Batch-Flush mit {len(batch)} Domains")
         cache_manager.upsert_list_cache(
             url,
             current_md5,

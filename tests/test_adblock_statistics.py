@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import io
 import logging
 import os
 import subprocess
@@ -19,6 +20,56 @@ import adblock  # noqa: E402
 import caching  # noqa: E402
 import config as config_module  # noqa: E402
 import monitoring  # noqa: E402
+
+
+def test_log_once_writes_single_record_and_console_entry(monkeypatch):
+    records: list[str] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    logger = adblock.logger
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+
+    capture_handler = CaptureHandler(level=logging.DEBUG)
+
+    fake_stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", fake_stdout)
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setLevel(logging.INFO)
+    stream_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logger.handlers = [capture_handler, stream_handler]
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    monkeypatch.setattr(adblock, "logged_messages", set())
+    monkeypatch.setattr(adblock, "console_logged_messages", set())
+    monkeypatch.setattr(config_module, "logged_messages", adblock.logged_messages)
+    monkeypatch.setattr(
+        config_module,
+        "console_logged_messages",
+        adblock.console_logged_messages,
+    )
+
+    try:
+        adblock.log_once(logging.WARNING, "unique message", console=True)
+        adblock.log_once(logging.WARNING, "unique message", console=True)
+
+        assert records == ["unique message"]
+
+        stream_handler.flush()
+        console_lines = fake_stdout.getvalue().strip().splitlines()
+        occurrences = sum(1 for line in console_lines if "unique message" in line)
+        assert occurrences == 1
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
 
 
 def test_ensure_list_stats_entry_initializes_and_updates(monkeypatch):
@@ -254,8 +305,12 @@ def test_process_list_enters_emergency_mode_and_flushes(monkeypatch, tmp_path):
     test_config = config_values.copy()
     monkeypatch.setattr(config_module, "CONFIG", test_config.copy(), raising=False)
     monkeypatch.setattr(adblock, "CONFIG", test_config.copy(), raising=False)
-    monkeypatch.setattr(adblock.config, "global_mode", adblock.SystemMode.NORMAL, raising=False)
-    monkeypatch.setattr(config_module, "global_mode", adblock.SystemMode.NORMAL, raising=False)
+    monkeypatch.setattr(
+        adblock.config, "global_mode", adblock.SystemMode.NORMAL, raising=False
+    )
+    monkeypatch.setattr(
+        config_module, "global_mode", adblock.SystemMode.NORMAL, raising=False
+    )
 
     memory_values_mb = [80, 40, 120, 120, 120]
     call_index = {"value": 0}
@@ -265,7 +320,9 @@ def test_process_list_enters_emergency_mode_and_flushes(monkeypatch, tmp_path):
         call_index["value"] += 1
         return SimpleNamespace(available=value_mb * 1024 * 1024)
 
-    monkeypatch.setattr(adblock.psutil, "virtual_memory", fake_virtual_memory, raising=False)
+    monkeypatch.setattr(
+        adblock.psutil, "virtual_memory", fake_virtual_memory, raising=False
+    )
     monkeypatch.setattr(
         adblock.psutil,
         "Process",
@@ -275,7 +332,9 @@ def test_process_list_enters_emergency_mode_and_flushes(monkeypatch, tmp_path):
         raising=False,
     )
 
-    monkeypatch.setattr(adblock, "get_system_resources", lambda: (1, 50, 1), raising=False)
+    monkeypatch.setattr(
+        adblock, "get_system_resources", lambda: (1, 50, 1), raising=False
+    )
 
     sleep_calls: list[float] = []
 
@@ -361,7 +420,9 @@ def test_process_list_enters_emergency_mode_and_flushes(monkeypatch, tmp_path):
     assert filtered_lines == domains
 
 
-def test_process_list_recreates_filtered_file_when_missing(monkeypatch, tmp_path, caplog):
+def test_process_list_recreates_filtered_file_when_missing(
+    monkeypatch, tmp_path, caplog
+):
     monkeypatch.setattr(adblock, "TMP_DIR", str(tmp_path))
     monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
     monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie_cache.pkl"))
@@ -413,7 +474,9 @@ def test_process_list_recreates_filtered_file_when_missing(monkeypatch, tmp_path
     )
 
     url = "https://example.com/list.txt"
-    filtered_path = Path(adblock.TMP_DIR) / f"{adblock.sanitize_url_for_tmp(url)}.filtered"
+    filtered_path = (
+        Path(adblock.TMP_DIR) / f"{adblock.sanitize_url_for_tmp(url)}.filtered"
+    )
     original_duplicates = adblock.STATISTICS.get("duplicates", 0)
     original_cache_hits = adblock.STATISTICS.get("cache_hits", 0)
     original_domain_sources = adblock.STATISTICS["domain_sources"].copy()
@@ -423,9 +486,7 @@ def test_process_list_recreates_filtered_file_when_missing(monkeypatch, tmp_path
 
     async def run_test():
         try:
-            result_first = await adblock.process_list(
-                url, cache_manager, FakeSession("data")
-            )
+            await adblock.process_list(url, cache_manager, FakeSession("data"))
 
             assert filtered_path.exists()
             filtered_path.unlink()
@@ -659,7 +720,9 @@ def test_process_list_emergency_flushes_batch(monkeypatch, tmp_path):
     assert flush_events, "Der Trie wurde nie geflusht"
     assert flush_events[0] == 1, "Der erste Flush sollte den Notfall-Batch enthalten"
     assert len(flush_events) >= 2, "Der finale Flush sollte zusätzlich stattfinden"
-    assert sleep_calls == [], "Es darf kein künstlicher Schlaf im Notfallpfad stattfinden"
+    assert (
+        sleep_calls == []
+    ), "Es darf kein künstlicher Schlaf im Notfallpfad stattfinden"
     assert mode_after_run and mode_after_run[0] == adblock.SystemMode.EMERGENCY
 
 
