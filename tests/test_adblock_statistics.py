@@ -145,6 +145,19 @@ class EmergencyTestCacheManager:
         return None
 
 
+class MonitoringTestCacheManager:
+    def __init__(self):
+        self.adjust_calls = 0
+        self.threshold_updates = 0
+        self.domain_cache = SimpleNamespace(update_threshold=self._update_threshold)
+
+    def adjust_cache_size(self):
+        self.adjust_calls += 1
+
+    def _update_threshold(self):
+        self.threshold_updates += 1
+
+
 def test_get_system_resources_uses_non_blocking_cpu_percent(monkeypatch):
     intervals = []
 
@@ -202,6 +215,208 @@ def test_get_system_resources_caches_recent_values(monkeypatch):
 
     assert first == second
     assert call_counter["count"] == 1
+
+
+def test_monitor_resources_triggers_emergency_on_cpu(monkeypatch, caplog):
+    cache_manager = MonitoringTestCacheManager()
+    config_values = config_module.DEFAULT_CONFIG.copy()
+    config_values["resource_thresholds"] = (
+        config_values["resource_thresholds"].copy()
+    )
+    config_values["resource_thresholds"].update(
+        moving_average_window=3,
+        consecutive_violations=2,
+        high_cpu_percent=85,
+        high_latency_s=5.0,
+        low_memory_mb=128,
+        emergency_memory_mb=64,
+    )
+    config_values["send_email"] = True
+
+    email_calls: list[tuple[str, str, dict]] = []
+
+    def fake_send_email(subject: str, body: str, cfg: dict) -> None:
+        email_calls.append((subject, body, cfg))
+
+    monkeypatch.setattr(monitoring, "send_email", fake_send_email)
+    monkeypatch.setattr(
+        config_module, "global_mode", adblock.SystemMode.NORMAL, raising=False
+    )
+
+    cpu_values = [90.0, 92.0, 93.0]
+    memory_values = [512, 512, 512]
+    latency_values = [0.2, 0.2, 0.2]
+    counters = {"cpu": 0, "mem": 0, "lat": 0}
+
+    def fake_cpu_percent(interval=None):
+        index = min(counters["cpu"], len(cpu_values) - 1)
+        counters["cpu"] += 1
+        return cpu_values[index]
+
+    def fake_virtual_memory():
+        index = min(counters["mem"], len(memory_values) - 1)
+        counters["mem"] += 1
+        return SimpleNamespace(available=memory_values[index] * 1024 * 1024)
+
+    async def fake_latency(_config):
+        index = min(counters["lat"], len(latency_values) - 1)
+        counters["lat"] += 1
+        return latency_values[index]
+
+    sleep_state = {"count": 0}
+
+    async def fake_sleep(_seconds):
+        sleep_state["count"] += 1
+        if sleep_state["count"] >= 3:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", fake_cpu_percent)
+    monkeypatch.setattr(monitoring.psutil, "virtual_memory", fake_virtual_memory)
+    monkeypatch.setattr(monitoring, "check_network_latency", fake_latency)
+    monkeypatch.setattr(monitoring.asyncio, "sleep", fake_sleep)
+
+    caplog.set_level(logging.WARNING, logger=monitoring.logger.name)
+    asyncio.run(monitoring.monitor_resources(cache_manager, config_values))
+
+    assert cache_manager.adjust_calls >= 1
+    assert cache_manager.threshold_updates >= 1
+    assert config_module.global_mode == adblock.SystemMode.EMERGENCY
+    assert email_calls and email_calls[0][0] == "AdBlock Ressourcenwarnung: EMERGENCY"
+    assert any("CPU-Auslastung" in message for message in caplog.messages)
+
+
+def test_monitor_resources_enters_low_memory_mode(monkeypatch, caplog):
+    cache_manager = MonitoringTestCacheManager()
+    config_values = config_module.DEFAULT_CONFIG.copy()
+    config_values["resource_thresholds"] = (
+        config_values["resource_thresholds"].copy()
+    )
+    config_values["resource_thresholds"].update(
+        moving_average_window=3,
+        consecutive_violations=2,
+        high_cpu_percent=95,
+        high_latency_s=5.0,
+        low_memory_mb=150,
+        emergency_memory_mb=70,
+    )
+    config_values["send_email"] = True
+
+    email_calls: list[tuple[str, str, dict]] = []
+
+    def fake_send_email(subject: str, body: str, cfg: dict) -> None:
+        email_calls.append((subject, body, cfg))
+
+    monkeypatch.setattr(monitoring, "send_email", fake_send_email)
+    monkeypatch.setattr(
+        config_module, "global_mode", adblock.SystemMode.NORMAL, raising=False
+    )
+
+    cpu_values = [10.0, 12.0, 11.0]
+    memory_values = [145, 130, 125]
+    latency_values = [0.1, 0.1, 0.1]
+    counters = {"cpu": 0, "mem": 0, "lat": 0}
+
+    def fake_cpu_percent(interval=None):
+        index = min(counters["cpu"], len(cpu_values) - 1)
+        counters["cpu"] += 1
+        return cpu_values[index]
+
+    def fake_virtual_memory():
+        index = min(counters["mem"], len(memory_values) - 1)
+        counters["mem"] += 1
+        return SimpleNamespace(available=memory_values[index] * 1024 * 1024)
+
+    async def fake_latency(_config):
+        index = min(counters["lat"], len(latency_values) - 1)
+        counters["lat"] += 1
+        return latency_values[index]
+
+    sleep_state = {"count": 0}
+
+    async def fake_sleep(_seconds):
+        sleep_state["count"] += 1
+        if sleep_state["count"] >= 3:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", fake_cpu_percent)
+    monkeypatch.setattr(monitoring.psutil, "virtual_memory", fake_virtual_memory)
+    monkeypatch.setattr(monitoring, "check_network_latency", fake_latency)
+    monkeypatch.setattr(monitoring.asyncio, "sleep", fake_sleep)
+
+    caplog.set_level(logging.WARNING, logger=monitoring.logger.name)
+    asyncio.run(monitoring.monitor_resources(cache_manager, config_values))
+
+    assert config_module.global_mode == adblock.SystemMode.LOW_MEMORY
+    assert email_calls and email_calls[0][0] == "AdBlock Ressourcenwarnung: LOW_MEMORY"
+    assert any("low_memory" in message for message in caplog.messages)
+
+
+def test_monitor_resources_recovers_to_normal(monkeypatch, caplog):
+    cache_manager = MonitoringTestCacheManager()
+    config_values = config_module.DEFAULT_CONFIG.copy()
+    config_values["resource_thresholds"] = (
+        config_values["resource_thresholds"].copy()
+    )
+    config_values["resource_thresholds"].update(
+        moving_average_window=3,
+        consecutive_violations=2,
+        high_cpu_percent=85,
+        high_latency_s=5.0,
+        low_memory_mb=128,
+        emergency_memory_mb=64,
+    )
+    config_values["send_email"] = True
+
+    email_calls: list[tuple[str, str, dict]] = []
+
+    def fake_send_email(subject: str, body: str, cfg: dict) -> None:
+        email_calls.append((subject, body, cfg))
+
+    monkeypatch.setattr(monitoring, "send_email", fake_send_email)
+    monkeypatch.setattr(
+        config_module, "global_mode", adblock.SystemMode.NORMAL, raising=False
+    )
+
+    cpu_values = [95.0, 96.0, 25.0, 20.0, 15.0]
+    memory_values = [512, 512, 512, 512, 512]
+    latency_values = [0.2, 0.2, 0.2, 0.2, 0.2]
+    counters = {"cpu": 0, "mem": 0, "lat": 0}
+
+    def fake_cpu_percent(interval=None):
+        index = min(counters["cpu"], len(cpu_values) - 1)
+        counters["cpu"] += 1
+        return cpu_values[index]
+
+    def fake_virtual_memory():
+        index = min(counters["mem"], len(memory_values) - 1)
+        counters["mem"] += 1
+        return SimpleNamespace(available=memory_values[index] * 1024 * 1024)
+
+    async def fake_latency(_config):
+        index = min(counters["lat"], len(latency_values) - 1)
+        counters["lat"] += 1
+        return latency_values[index]
+
+    sleep_state = {"count": 0}
+
+    async def fake_sleep(_seconds):
+        sleep_state["count"] += 1
+        if sleep_state["count"] >= 5:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", fake_cpu_percent)
+    monkeypatch.setattr(monitoring.psutil, "virtual_memory", fake_virtual_memory)
+    monkeypatch.setattr(monitoring, "check_network_latency", fake_latency)
+    monkeypatch.setattr(monitoring.asyncio, "sleep", fake_sleep)
+
+    caplog.set_level(logging.INFO, logger=monitoring.logger.name)
+    asyncio.run(monitoring.monitor_resources(cache_manager, config_values))
+
+    assert config_module.global_mode == adblock.SystemMode.NORMAL
+    assert email_calls and len(email_calls) == 1
+    assert email_calls[0][0] == "AdBlock Ressourcenwarnung: EMERGENCY"
+    assert any("systemmodus gewechselt zu emergency" in message.lower() for message in caplog.messages)
+    assert any("systemmodus gewechselt zu normal" in message.lower() for message in caplog.messages)
 
 
 def test_process_list_cache_reuses_statistics(monkeypatch, tmp_path):
