@@ -331,6 +331,68 @@ def test_monitor_resources_triggers_emergency_on_cpu(monkeypatch, caplog):
     assert any("CPU-Auslastung" in message for message in caplog.messages)
 
 
+def test_monitor_resources_detects_dns_failure_with_high_latency_threshold(
+    monkeypatch, caplog
+):
+    """DNS-Ausfälle mit unendlicher Latenz erzwingen nun auch bei >5s Schwelle den Notmodus."""
+
+    cache_manager = MonitoringTestCacheManager()
+    config_values = config_module.DEFAULT_CONFIG.copy()
+    config_values["resource_thresholds"] = (
+        config_values["resource_thresholds"].copy()
+    )
+    config_values["resource_thresholds"].update(
+        moving_average_window=3,
+        consecutive_violations=2,
+        high_cpu_percent=95,
+        high_latency_s=12.0,
+        low_memory_mb=128,
+        emergency_memory_mb=64,
+    )
+    config_values["send_email"] = False
+
+    monkeypatch.setattr(
+        config_module, "global_mode", adblock.SystemMode.NORMAL, raising=False
+    )
+
+    cpu_values = [5.0, 6.0, 5.5]
+    memory_values = [512, 512, 512]
+    counters = {"cpu": 0, "mem": 0, "lat": 0}
+
+    def fake_cpu_percent(interval=None):
+        index = min(counters["cpu"], len(cpu_values) - 1)
+        counters["cpu"] += 1
+        return cpu_values[index]
+
+    def fake_virtual_memory():
+        index = min(counters["mem"], len(memory_values) - 1)
+        counters["mem"] += 1
+        return SimpleNamespace(available=memory_values[index] * 1024 * 1024)
+
+    async def fake_latency(_config):
+        counters["lat"] += 1
+        return float("inf")
+
+    sleep_state = {"count": 0}
+
+    async def fake_sleep(_seconds):
+        sleep_state["count"] += 1
+        if sleep_state["count"] >= 3:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", fake_cpu_percent)
+    monkeypatch.setattr(monitoring.psutil, "virtual_memory", fake_virtual_memory)
+    monkeypatch.setattr(monitoring, "check_network_latency", fake_latency)
+    monkeypatch.setattr(monitoring.asyncio, "sleep", fake_sleep)
+
+    caplog.set_level(logging.ERROR, logger=monitoring.logger.name)
+    asyncio.run(monitoring.monitor_resources(cache_manager, config_values))
+
+    assert counters["lat"] >= 2
+    assert config_module.global_mode == adblock.SystemMode.EMERGENCY
+    assert any("DNS-Latenz" in message for message in caplog.messages)
+
+
 def test_monitor_resources_enters_low_memory_mode(monkeypatch, caplog):
     cache_manager = MonitoringTestCacheManager()
     config_values = config_module.DEFAULT_CONFIG.copy()
