@@ -30,6 +30,7 @@ import socket
 import asyncio
 import backoff
 from enum import Enum
+from types import MethodType
 from typing import Any, Dict, Sequence, Set
 
 from caching import (
@@ -99,32 +100,6 @@ def _is_console_handler(handler: logging.Handler) -> bool:
     return stream is stdout or stream is stderr
 
 
-def _dispatch_to_handlers(
-    level: int,
-    message: str,
-    handlers: Sequence[logging.Handler],
-    caller: tuple[str, int, str],
-) -> bool:
-    dispatched = False
-    fn, lineno, func_name = caller
-    for handler in handlers:
-        if level < handler.level:
-            continue
-        record = logger.makeRecord(
-            logger.name,
-            level,
-            fn,
-            lineno,
-            message,
-            args=(),
-            exc_info=None,
-            func=func_name,
-        )
-        if handler.handle(record):
-            dispatched = True
-    return dispatched
-
-
 def log_once(level, message, console=True):
     log_to_file = message not in logged_messages
     log_to_console = console and message not in console_logged_messages
@@ -135,47 +110,70 @@ def log_once(level, message, console=True):
     if not logger.isEnabledFor(level):
         return
 
-    console_handlers: list[logging.Handler] = []
-    other_handlers: list[logging.Handler] = []
-    for handler in logger.handlers:
-        if _is_console_handler(handler):
-            console_handlers.append(handler)
-        else:
-            other_handlers.append(handler)
-
-    try:
-        caller_fn, caller_lineno, caller_func, _ = logger.findCaller(
-            stack_info=False, stacklevel=3
-        )
-    except ValueError:
-        caller_fn, caller_lineno, caller_func = __file__, 0, log_once.__name__
+    handlers_with_scope: list[tuple[logging.Handler, bool]] = []
+    seen_handlers: set[int] = set()
+    current_logger = logger
+    while current_logger:
+        for handler in current_logger.handlers:
+            handler_id = id(handler)
+            if handler_id in seen_handlers:
+                continue
+            seen_handlers.add(handler_id)
+            handlers_with_scope.append((handler, _is_console_handler(handler)))
+        if not current_logger.propagate:
+            break
+        current_logger = current_logger.parent
 
     file_dispatched = False
     console_dispatched = False
+    patched_handlers: list[tuple[logging.Handler, MethodType]] = []
 
-    if log_to_file and other_handlers:
-        file_dispatched = _dispatch_to_handlers(
-            level, message, other_handlers, (caller_fn, caller_lineno, caller_func)
-        )
-        if file_dispatched:
-            logged_messages.add(message)
+    def _patch_handler(
+        target_handler: logging.Handler,
+        allow: bool,
+        console_handler: bool,
+    ) -> None:
+        original_handle = target_handler.handle
 
-    if log_to_console and console_handlers:
-        console_dispatched = _dispatch_to_handlers(
-            level,
-            message,
-            console_handlers,
-            (caller_fn, caller_lineno, caller_func),
-        )
-        if console_dispatched:
-            console_logged_messages.add(message)
+        if not allow:
 
-    if not logger.handlers:
-        logger.log(level, message)
-        if log_to_file:
-            logged_messages.add(message)
-        if log_to_console:
-            console_logged_messages.add(message)
+            def wrapper(self, record):
+                return False
+
+        else:
+
+            def wrapper(self, record, _original=original_handle, _is_console=console_handler):
+                nonlocal file_dispatched, console_dispatched
+                result = _original(record)
+                if result:
+                    if _is_console:
+                        console_dispatched = True
+                    else:
+                        file_dispatched = True
+                return result
+
+        target_handler.handle = MethodType(wrapper, target_handler)
+        patched_handlers.append((target_handler, original_handle))
+
+    if handlers_with_scope:
+        for handler, is_console in handlers_with_scope:
+            allow_logging = log_to_console if is_console else log_to_file
+            _patch_handler(handler, allow_logging, is_console)
+
+        try:
+            logger.log(level, message, stacklevel=3)
+        finally:
+            for handler, original_handle in patched_handlers:
+                handler.handle = original_handle
+    else:
+        logger.log(level, message, stacklevel=3)
+        file_dispatched = log_to_file
+        console_dispatched = log_to_console
+
+    if log_to_file and file_dispatched:
+        logged_messages.add(message)
+    if log_to_console and console_dispatched:
+        console_logged_messages.add(message)
 
 
 def create_default_list_stats_entry() -> Dict[str, Any]:
