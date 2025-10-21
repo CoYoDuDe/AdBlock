@@ -72,6 +72,43 @@ def test_log_once_writes_single_record_and_console_entry(monkeypatch):
         logger.propagate = original_propagate
 
 
+def test_log_once_respects_handler_threshold(monkeypatch):
+    records: list[str] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    logger = adblock.logger
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+
+    capture_handler = CaptureHandler()
+    capture_handler.setLevel(logging.ERROR)
+
+    logger.handlers = [capture_handler]
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+
+    monkeypatch.setattr(adblock, "logged_messages", set())
+    monkeypatch.setattr(adblock, "console_logged_messages", set())
+    monkeypatch.setattr(config_module, "logged_messages", adblock.logged_messages)
+    monkeypatch.setattr(
+        config_module,
+        "console_logged_messages",
+        adblock.console_logged_messages,
+    )
+
+    try:
+        adblock.log_once(logging.INFO, "should not be logged", console=False)
+        assert records == []
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
 def test_ensure_list_stats_entry_initializes_and_updates(monkeypatch):
     stats_store = defaultdict(adblock.create_default_list_stats_entry)
     monkeypatch.setitem(adblock.STATISTICS, "list_stats", stats_store)

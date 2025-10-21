@@ -108,6 +108,9 @@ def _dispatch_to_handlers(
     dispatched = False
     fn, lineno, func_name = caller
     for handler in handlers:
+        if level < handler.level:
+            continue
+
         record = logger.makeRecord(
             logger.name,
             level,
