@@ -30,7 +30,6 @@ import socket
 import asyncio
 import backoff
 from enum import Enum
-from types import MethodType
 from typing import Any, Dict, Sequence, Set
 
 from caching import (
@@ -126,45 +125,41 @@ def log_once(level, message, console=True):
 
     file_dispatched = False
     console_dispatched = False
-    patched_handlers: list[tuple[logging.Handler, MethodType]] = []
-
-    def _patch_handler(
-        target_handler: logging.Handler,
-        allow: bool,
-        console_handler: bool,
-    ) -> None:
-        original_handle = target_handler.handle
-
-        if not allow:
-
-            def wrapper(self, record):
-                return False
-
-        else:
-
-            def wrapper(self, record, _original=original_handle, _is_console=console_handler):
-                nonlocal file_dispatched, console_dispatched
-                result = _original(record)
-                if result:
-                    if _is_console:
-                        console_dispatched = True
-                    else:
-                        file_dispatched = True
-                return result
-
-        target_handler.handle = MethodType(wrapper, target_handler)
-        patched_handlers.append((target_handler, original_handle))
-
     if handlers_with_scope:
+        if logging._srcfile:
+            fn, lno, func, sinfo = logger.findCaller(stack_info=False, stacklevel=3)
+        else:
+            fn, lno, func, sinfo = "(unknown file)", 0, "(unknown function)", None
+
+        record = logger.makeRecord(
+            logger.name,
+            level,
+            fn,
+            lno,
+            message,
+            args=(),
+            exc_info=None,
+            func=func,
+            extra=None,
+            sinfo=sinfo,
+        )
+
+        if not logger.filter(record):
+            return
+
         for handler, is_console in handlers_with_scope:
             allow_logging = log_to_console if is_console else log_to_file
-            _patch_handler(handler, allow_logging, is_console)
+            if not allow_logging:
+                continue
+            if record.levelno < handler.level:
+                continue
 
-        try:
-            logger.log(level, message, stacklevel=3)
-        finally:
-            for handler, original_handle in patched_handlers:
-                handler.handle = original_handle
+            result = handler.handle(record)
+            if result:
+                if is_console:
+                    console_dispatched = True
+                else:
+                    file_dispatched = True
     else:
         logger.log(level, message, stacklevel=3)
         file_dispatched = log_to_file
