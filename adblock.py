@@ -418,6 +418,9 @@ def load_config(config_path: str | None = None):
                 custom_config = {}
         CONFIG.clear()
         CONFIG.update(deep_merge_dicts(DEFAULT_CONFIG, custom_config))
+        original_send_email = custom_config.get(
+            "send_email", DEFAULT_CONFIG.get("send_email", False)
+        )
         for key in [
             "log_file",
             "hosts_ip",
@@ -493,12 +496,13 @@ def load_config(config_path: str | None = None):
                         "email_sender",
                     ]
                 ]
-            ):
+                ):
                 logger.warning(
                     "Ungültige SMTP-Konfiguration, deaktiviere E-Mail-Benachrichtigungen"
                 )
                 CONFIG["send_email"] = False
         persisted_config: Dict[str, Any] = dict(CONFIG)
+        persisted_config["send_email"] = original_send_email
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(persisted_config, f, indent=4)

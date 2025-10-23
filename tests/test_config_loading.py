@@ -50,6 +50,34 @@ def test_load_config_retains_smtp_password(tmp_path, monkeypatch):
     assert saved_config["smtp_password"] == password_value
 
 
+def test_load_config_preserves_user_email_preference_without_password(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "send_email": True,
+                "use_smtp": True,
+                "smtp_server": "smtp.example.com",
+                "smtp_port": 587,
+                "smtp_user": "user@example.com",
+                "email_recipient": "admin@example.com",
+                "email_sender": "bot@example.com",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    load_config(str(config_path))
+
+    assert CONFIG["send_email"] is False
+    persisted_config = json.loads(config_path.read_text(encoding="utf-8"))
+    # Benutzerpräferenzen auf der Platte bewahren, obwohl der Lauf ohne SMTP-Passwort E-Mails deaktiviert.
+    assert persisted_config["send_email"] is True
+
+
 def test_load_config_resets_invalid_domain_timeout(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({"domain_timeout": 0}), encoding="utf-8")
