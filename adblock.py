@@ -455,6 +455,12 @@ def load_config(config_path: str | None = None):
                 )
                 CONFIG["send_email"] = False
         persisted_config: Dict[str, Any] = dict(CONFIG)
+        if "SMTP_PASSWORD" in os.environ:
+            original_password = custom_config.get("smtp_password")
+            if original_password is None:
+                persisted_config.pop("smtp_password", None)
+            else:
+                persisted_config["smtp_password"] = original_password
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(persisted_config, f, indent=4)

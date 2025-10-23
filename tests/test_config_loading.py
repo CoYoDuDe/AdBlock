@@ -48,3 +48,17 @@ def test_load_config_retains_smtp_password(tmp_path, monkeypatch):
     saved_config = json.loads(config_path.read_text(encoding="utf-8"))
     # Der SMTP-Zugang muss erhalten bleiben, damit networking.send_email weiterhin authentifizieren kann.
     assert saved_config["smtp_password"] == password_value
+
+
+def test_load_config_does_not_persist_env_smtp_password(tmp_path, monkeypatch):
+    env_password = "env-secret"
+    monkeypatch.setenv("SMTP_PASSWORD", env_password)
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    load_config(str(config_path))
+
+    assert CONFIG["smtp_password"] == env_password
+    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved_config.get("smtp_password") != env_password
+    assert "smtp_password" not in saved_config or saved_config["smtp_password"] == ""
