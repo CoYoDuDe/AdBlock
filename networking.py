@@ -146,12 +146,9 @@ async def test_single_domain_async(
     if cached_dns is not None:
         if isinstance(cached_dns, dict):
             cached_timestamp = cached_dns.get("timestamp")
-            if (
-                dns_cache_ttl <= 0
-                or (
-                    cached_timestamp is not None
-                    and time.time() - cached_timestamp <= dns_cache_ttl
-                )
+            if dns_cache_ttl <= 0 or (
+                cached_timestamp is not None
+                and time.time() - cached_timestamp <= dns_cache_ttl
             ):
                 return bool(cached_dns.get("reachable"))
         else:

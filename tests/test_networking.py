@@ -378,9 +378,7 @@ def test_test_single_domain_async_respects_dns_cache_ttl():
             self.calls += 1
             return [domain, record]
 
-    dns_cache = {
-        "example.com": {"reachable": True, "timestamp": time.time() - 2}
-    }
+    dns_cache = {"example.com": {"reachable": True, "timestamp": time.time() - 2}}
     cache_lock = Lock()
     cache_manager = CacheManager()
     resolver = Resolver()
@@ -407,9 +405,7 @@ def test_test_single_domain_async_respects_dns_cache_ttl():
     assert resolver.calls == 1
 
 
-def test_test_single_domain_async_requeries_after_cache_expiry(
-    monkeypatch, tmp_path
-):
+def test_test_single_domain_async_requeries_after_cache_expiry(monkeypatch, tmp_path):
     monkeypatch.setattr(caching, "TMP_DIR", str(tmp_path))
     monkeypatch.setattr(caching, "TRIE_CACHE_PATH", str(tmp_path / "trie.pkl"))
     monkeypatch.setattr(caching, "DB_PATH", str(tmp_path / "cache.db"))
