@@ -2,6 +2,7 @@ import asyncio
 import copy
 import io
 import logging
+import math
 import os
 import subprocess
 import threading
@@ -632,6 +633,62 @@ def test_monitor_resources_detects_dns_failure_with_high_latency_threshold(
     assert counters["lat"] >= 2
     assert config_module.global_mode == adblock.SystemMode.EMERGENCY
     assert any("DNS-Latenz" in message for message in caplog.messages)
+
+
+def test_monitor_resources_ignores_infinite_latency_threshold(monkeypatch, caplog):
+    """Regression: Ein ∞-Grenzwert deaktiviert die Latenzüberwachung und verhindert Fehlalarme."""
+
+    cache_manager = MonitoringTestCacheManager()
+    config_values = config_module.DEFAULT_CONFIG.copy()
+    config_values["resource_thresholds"] = (
+        config_values["resource_thresholds"].copy()
+    )
+    config_values["resource_thresholds"].update(
+        moving_average_window=3,
+        consecutive_violations=2,
+        high_cpu_percent=95,
+        low_memory_mb=64,
+        emergency_memory_mb=32,
+    )
+    # Ein unendlicher Grenzwert deaktiviert die Latenzüberwachung, damit bewusst
+    # ausgeschaltete Prüfungen keine Fehlalarme erzeugen.
+    config_values["resource_thresholds"]["high_latency_s"] = None
+    config_values["send_email"] = True
+
+    monkeypatch.setattr(
+        config_module, "global_mode", adblock.SystemMode.NORMAL, raising=False
+    )
+
+    latency_calls = {"count": 0}
+
+    def fake_cpu_percent(interval=None):
+        return 10.0
+
+    def fake_virtual_memory():
+        return SimpleNamespace(available=512 * 1024 * 1024)
+
+    async def fake_latency(_config):
+        latency_calls["count"] += 1
+        return math.inf
+
+    sleep_state = {"count": 0}
+
+    async def fake_sleep(_seconds):
+        sleep_state["count"] += 1
+        if sleep_state["count"] >= 3:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", fake_cpu_percent)
+    monkeypatch.setattr(monitoring.psutil, "virtual_memory", fake_virtual_memory)
+    monkeypatch.setattr(monitoring, "check_network_latency", fake_latency)
+    monkeypatch.setattr(monitoring.asyncio, "sleep", fake_sleep)
+
+    caplog.set_level(logging.ERROR, logger=monitoring.logger.name)
+    asyncio.run(monitoring.monitor_resources(cache_manager, config_values))
+
+    assert latency_calls["count"] >= 2
+    assert config_module.global_mode == adblock.SystemMode.NORMAL
+    assert all("DNS-Latenz" not in message for message in caplog.messages)
 
 
 def test_monitor_resources_handles_primary_dns_failure(monkeypatch, caplog):
