@@ -165,6 +165,15 @@ def log_once(level, message, console=True):
     dispatch_state = {"file": False, "console": False}
     if handlers_with_scope:
         marker = object()
+        for handler, is_console in handlers_with_scope:
+            allow_logging = log_to_console if is_console else log_to_file
+            filter_obj = _LogOncePerCallFilter(allow_logging, is_console, dispatch_state, marker)
+            handler.acquire()
+            try:
+                handler.addFilter(filter_obj)
+            finally:
+                handler.release()
+            filters_attached.append((handler, filter_obj))
         with ExitStack() as stack:
             for handler, is_console in handlers_with_scope:
                 allow_logging = log_to_console if is_console else log_to_file
