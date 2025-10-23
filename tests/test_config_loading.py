@@ -31,3 +31,20 @@ def test_load_config_preserves_nested_defaults(tmp_path):
         CONFIG["resource_thresholds"]["emergency_memory_mb"]
         == DEFAULT_CONFIG["resource_thresholds"]["emergency_memory_mb"]
     )
+
+
+def test_load_config_retains_smtp_password(tmp_path, monkeypatch):
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    config_path = tmp_path / "config.json"
+    password_value = "geheimes-passwort"
+    config_path.write_text(
+        json.dumps({"smtp_password": password_value}),
+        encoding="utf-8",
+    )
+
+    load_config(str(config_path))
+
+    assert CONFIG["smtp_password"] == password_value
+    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    # Der SMTP-Zugang muss erhalten bleiben, damit networking.send_email weiterhin authentifizieren kann.
+    assert saved_config["smtp_password"] == password_value

@@ -454,13 +454,10 @@ def load_config(config_path: str | None = None):
                     "Ungültige SMTP-Konfiguration, deaktiviere E-Mail-Benachrichtigungen"
                 )
                 CONFIG["send_email"] = False
+        persisted_config: Dict[str, Any] = dict(CONFIG)
         try:
             with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {k: v for k, v in CONFIG.items() if k != "smtp_password"},
-                    f,
-                    indent=4,
-                )
+                json.dump(persisted_config, f, indent=4)
                 f.write("\n")
             logger.debug(f"Konfigurationsdatei aktualisiert: {config_path}")
         except Exception as e:
