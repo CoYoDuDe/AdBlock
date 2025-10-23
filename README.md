@@ -20,9 +20,34 @@ python adblock.py [--config path/zur/config.json] [--debug]
 
 ## 🔧 Voraussetzungen
 
+### Laufzeitumgebung
+
 - Python 3.8+
-- `requests`, `re`, `os` (Standard oder per `requirements.txt`)
 - Setze die Umgebungsvariable `SMTP_PASSWORD`, falls SMTP-E-Mails aktiviert sind
+
+### Laufzeitabhängigkeiten (`requirements.txt`)
+
+- [aiohttp](https://docs.aiohttp.org/) – Asynchroner HTTP-Client/-Server zum Laden externer Blocklisten
+- [aiodns](https://github.com/saghul/aiodns) – DNS-Lookups mit asyncio, u. a. für Reachability-Checks
+- [aiofiles](https://github.com/Tinche/aiofiles) – Asynchrone Dateizugriffe beim Schreiben der Ergebnisdateien
+- [backoff](https://github.com/litl/backoff) – Strategien für wiederholte Netzwerkversuche bei Fehlern
+- [psutil](https://psutil.readthedocs.io/) – Systemressourcen-Erfassung für Speicher-/Lastentscheidungen
+- [pybloom_live](https://github.com/jaybaird/python-bloomfilter) – Bloom-Filter zur effizienten Duplikaterkennung
+- [idna](https://github.com/kjd/idna) – IDNA-Konvertierung für internationale Domains
+- [requests](https://requests.readthedocs.io/en/latest/) – Klassischer HTTP-Client für Hilfsskripte & SetupHelper-Kompatibilität
+
+### Entwicklungs- & Test-Tooling (`requirements-dev.txt`)
+
+- [pytest](https://docs.pytest.org/en/latest/) – Test-Runner für Modul- und Integrationstests
+- [ruff](https://docs.astral.sh/ruff/) – Schnelles Linting mit Fokus auf Fehlerprävention
+- [black](https://black.readthedocs.io/en/stable/) – Konsistente Code-Formatierung
+- [flake8](https://flake8.pycqa.org/en/latest/) – Ergänzendes Linting & Style-Prüfungen
+
+### Referenzprojekte & Kompatibilitätsziele
+
+- [Pi-hole](https://pi-hole.net/) – Primäre Inspiration für hostbasierte Werbeblocker
+- [AdGuard Home](https://adguard.com/) – Vergleichsreferenz für DNS-basierte Filterlösungen
+- [SetupHelper (kwindrem)](https://github.com/kwindrem/SetupHelper) – Maßgebliche Basis für Installer-/Updater-Kompatibilität
 
 ## 🛠️ Setup
 
