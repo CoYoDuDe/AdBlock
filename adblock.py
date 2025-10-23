@@ -134,7 +134,9 @@ class _LogOncePerCallFilter(logging.Filter):
         return True
 
 
-def _remove_filter_from_handler(handler: logging.Handler, filter_obj: logging.Filter) -> None:
+def _remove_filter_from_handler(
+    handler: logging.Handler, filter_obj: logging.Filter
+) -> None:
     handler.acquire()
     try:
         handler.removeFilter(filter_obj)
@@ -520,7 +522,7 @@ def load_config(config_path: str | None = None):
                         "email_sender",
                     ]
                 ]
-                ):
+            ):
                 logger.warning(
                     "Ungültige SMTP-Konfiguration, deaktiviere E-Mail-Benachrichtigungen"
                 )
@@ -783,7 +785,7 @@ async def process_list(
         ) as f_temp, aiofiles.open(filtered_file, "w", encoding="utf-8") as f_filtered:
 
             async def flush_batch(reason: str | None = None) -> int:
-                nonlocal batch, unique_count, subdomain_count
+                nonlocal unique_count, subdomain_count
                 if reason:
                     logger.debug(reason)
                 if batch:

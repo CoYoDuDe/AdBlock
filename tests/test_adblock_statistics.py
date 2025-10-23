@@ -605,9 +605,7 @@ def test_get_system_resources_caches_recent_values(monkeypatch):
 def test_monitor_resources_triggers_emergency_on_cpu(monkeypatch, caplog):
     cache_manager = MonitoringTestCacheManager()
     config_values = config_module.DEFAULT_CONFIG.copy()
-    config_values["resource_thresholds"] = (
-        config_values["resource_thresholds"].copy()
-    )
+    config_values["resource_thresholds"] = config_values["resource_thresholds"].copy()
     config_values["resource_thresholds"].update(
         moving_average_window=3,
         consecutive_violations=2,
@@ -677,9 +675,7 @@ def test_monitor_resources_detects_dns_failure_with_high_latency_threshold(
 
     cache_manager = MonitoringTestCacheManager()
     config_values = config_module.DEFAULT_CONFIG.copy()
-    config_values["resource_thresholds"] = (
-        config_values["resource_thresholds"].copy()
-    )
+    config_values["resource_thresholds"] = config_values["resource_thresholds"].copy()
     config_values["resource_thresholds"].update(
         moving_average_window=3,
         consecutive_violations=2,
@@ -737,9 +733,7 @@ def test_monitor_resources_ignores_infinite_latency_threshold(monkeypatch, caplo
 
     cache_manager = MonitoringTestCacheManager()
     config_values = config_module.DEFAULT_CONFIG.copy()
-    config_values["resource_thresholds"] = (
-        config_values["resource_thresholds"].copy()
-    )
+    config_values["resource_thresholds"] = config_values["resource_thresholds"].copy()
     config_values["resource_thresholds"].update(
         moving_average_window=3,
         consecutive_violations=2,
@@ -791,9 +785,7 @@ def test_monitor_resources_ignores_infinite_latency_threshold(monkeypatch, caplo
 def test_monitor_resources_handles_primary_dns_failure(monkeypatch, caplog):
     cache_manager = MonitoringTestCacheManager()
     config_values = config_module.DEFAULT_CONFIG.copy()
-    config_values["resource_thresholds"] = (
-        config_values["resource_thresholds"].copy()
-    )
+    config_values["resource_thresholds"] = config_values["resource_thresholds"].copy()
     config_values["resource_thresholds"].update(
         moving_average_window=3,
         consecutive_violations=2,
@@ -873,9 +865,7 @@ def test_monitor_resources_handles_primary_dns_failure(monkeypatch, caplog):
 def test_monitor_resources_enters_low_memory_mode(monkeypatch, caplog):
     cache_manager = MonitoringTestCacheManager()
     config_values = config_module.DEFAULT_CONFIG.copy()
-    config_values["resource_thresholds"] = (
-        config_values["resource_thresholds"].copy()
-    )
+    config_values["resource_thresholds"] = config_values["resource_thresholds"].copy()
     config_values["resource_thresholds"].update(
         moving_average_window=3,
         consecutive_violations=2,
@@ -939,9 +929,7 @@ def test_monitor_resources_enters_low_memory_mode(monkeypatch, caplog):
 def test_monitor_resources_recovers_to_normal(monkeypatch, caplog):
     cache_manager = MonitoringTestCacheManager()
     config_values = config_module.DEFAULT_CONFIG.copy()
-    config_values["resource_thresholds"] = (
-        config_values["resource_thresholds"].copy()
-    )
+    config_values["resource_thresholds"] = config_values["resource_thresholds"].copy()
     config_values["resource_thresholds"].update(
         moving_average_window=3,
         consecutive_violations=2,
@@ -1000,8 +988,14 @@ def test_monitor_resources_recovers_to_normal(monkeypatch, caplog):
     assert config_module.global_mode == adblock.SystemMode.NORMAL
     assert email_calls and len(email_calls) == 1
     assert email_calls[0][0] == "AdBlock Ressourcenwarnung: EMERGENCY"
-    assert any("systemmodus gewechselt zu emergency" in message.lower() for message in caplog.messages)
-    assert any("systemmodus gewechselt zu normal" in message.lower() for message in caplog.messages)
+    assert any(
+        "systemmodus gewechselt zu emergency" in message.lower()
+        for message in caplog.messages
+    )
+    assert any(
+        "systemmodus gewechselt zu normal" in message.lower()
+        for message in caplog.messages
+    )
 
 
 def test_process_list_cache_reuses_statistics(monkeypatch, tmp_path):

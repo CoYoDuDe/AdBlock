@@ -1,4 +1,5 @@
+# Entwicklungs-Tooling – verifizierte Stable-Versionen (mindestens diese Stände erforderlich)
 ruff==0.14.1
-black==25.9.0
-flake8==7.3.0
+black==25.9.0  # Mindestversion laut PyPI-Release 25.9.0
+flake8==7.3.0  # Mindestversion laut offiziellem Release 7.3.0
 pytest==8.4.2

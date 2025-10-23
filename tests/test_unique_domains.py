@@ -8,7 +8,11 @@ def test_calculate_unique_domains_prefers_global_set_for_duplicates():
         "https://example.com/list1": {"unique": 2},
         "https://example.com/list2": {"unique": 2},
     }
-    global_unique_domains = {"duplicate.example", "only-list1.example", "only-list2.example"}
+    global_unique_domains = {
+        "duplicate.example",
+        "only-list1.example",
+        "only-list2.example",
+    }
 
     assert calculate_unique_domains(url_counts, global_unique_domains) == 3
 

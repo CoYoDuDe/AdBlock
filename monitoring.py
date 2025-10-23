@@ -28,14 +28,15 @@ async def check_network_latency(config: dict) -> float:
     # Monitoring und Produktionspfad identische DNS-Pfade bewerten und keine
     # widersprüchlichen Gesundheitsalarme erzeugen.
     dns_servers = list(
-        config.get("dns_servers")
-        or config_module.DEFAULT_CONFIG.get("dns_servers", [])
+        config.get("dns_servers") or config_module.DEFAULT_CONFIG.get("dns_servers", [])
     )
     if not dns_servers:
         return math.inf
 
     timeout = float(
-        config.get("domain_timeout", config_module.DEFAULT_CONFIG.get("domain_timeout", 5.0))
+        config.get(
+            "domain_timeout", config_module.DEFAULT_CONFIG.get("domain_timeout", 5.0)
+        )
     )
     try:
         ordered_servers = await select_best_dns_server(dns_servers, timeout=timeout)
@@ -84,9 +85,7 @@ async def monitor_resources(cache_manager, config: dict) -> None:
     logger.info("Starte Ressourcenüberwachung...")
     thresholds = config.get("resource_thresholds", {})
     moving_window = max(1, int(thresholds.get("moving_average_window", 5)))
-    consecutive_required = max(
-        1, int(thresholds.get("consecutive_violations", 1))
-    )
+    consecutive_required = max(1, int(thresholds.get("consecutive_violations", 1)))
     low_memory_threshold = float(thresholds.get("low_memory_mb", 0))
     emergency_memory_threshold = float(
         thresholds.get("emergency_memory_mb", low_memory_threshold / 2 or 0)
@@ -100,7 +99,7 @@ async def monitor_resources(cache_manager, config: dict) -> None:
             latency_threshold = float(raw_latency_threshold)
         except (TypeError, ValueError):
             logger.warning(
-                "Ungültiger Latenzschwellenwert %r – verwende Unendlich", 
+                "Ungültiger Latenzschwellenwert %r – verwende Unendlich",
                 raw_latency_threshold,
             )
             latency_threshold = float("inf")
@@ -181,9 +180,7 @@ async def monitor_resources(cache_manager, config: dict) -> None:
             else:
                 violation_streaks["latency"] = 0
 
-            any_violation = (
-                memory_emergency or memory_low or cpu_high or latency_high
-            )
+            any_violation = memory_emergency or memory_low or cpu_high or latency_high
             if any_violation:
                 recovery_streak = 0
             elif sample_count >= consecutive_required:
@@ -265,9 +262,7 @@ async def monitor_resources(cache_manager, config: dict) -> None:
                 )
                 logger.log(alert_level, mode_message)
                 if send_alert and config.get("send_email", False):
-                    subject = (
-                        f"AdBlock Ressourcenwarnung: {desired_mode.value.upper()}"
-                    )
+                    subject = f"AdBlock Ressourcenwarnung: {desired_mode.value.upper()}"
                     body = (
                         "Der Ressourcenmonitor hat einen Grenzwert überschritten.\n\n"
                         f"Aktueller Systemmodus: {desired_mode.value}\n"
