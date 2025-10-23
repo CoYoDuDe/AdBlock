@@ -74,6 +74,55 @@ def test_log_once_writes_single_record_and_console_entry(monkeypatch):
         logger.propagate = original_propagate
 
 
+def test_log_once_handles_file_and_stream_handlers(monkeypatch, tmp_path):
+    logger = adblock.logger
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+
+    log_file = tmp_path / "dual.log"
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    stream_buffer = io.StringIO()
+    stream_handler = logging.StreamHandler(stream_buffer)
+    stream_handler.setLevel(logging.INFO)
+    stream_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logger.handlers = [file_handler, stream_handler]
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    monkeypatch.setattr(adblock, "logged_messages", set())
+    monkeypatch.setattr(adblock, "console_logged_messages", set())
+    monkeypatch.setattr(config_module, "logged_messages", adblock.logged_messages)
+    monkeypatch.setattr(
+        config_module,
+        "console_logged_messages",
+        adblock.console_logged_messages,
+    )
+
+    try:
+        # Regression: deckt den ehemaligen NameError bei kombiniertem Datei- und Stream-Handler ab.
+        adblock.log_once(logging.INFO, "dual handler message", console=True)
+
+        file_handler.flush()
+        stream_handler.flush()
+
+        assert log_file.read_text(encoding="utf-8").strip().splitlines() == [
+            "dual handler message"
+        ]
+        console_lines = stream_buffer.getvalue().strip().splitlines()
+        assert console_lines == ["dual handler message"]
+    finally:
+        file_handler.close()
+        stream_handler.close()
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
 def test_log_once_defers_dedup_until_handlers_exist(monkeypatch):
     """Regression: Bootmeldungen dürfen erst nach Handler-Setup dedupliziert werden."""
 
