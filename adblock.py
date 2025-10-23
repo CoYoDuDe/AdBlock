@@ -491,9 +491,14 @@ def load_config(config_path: str | None = None):
         if not isinstance(CONFIG["category_weights"], dict):
             logger.warning("Ungültige category_weights, verwende Standard")
             CONFIG["category_weights"] = DEFAULT_CONFIG["category_weights"]
-        CONFIG["smtp_password"] = os.environ.get(
-            "SMTP_PASSWORD", CONFIG.get("smtp_password", "")
+        file_smtp_password = custom_config.get(
+            "smtp_password", DEFAULT_CONFIG.get("smtp_password", "")
         )
+        env_smtp_password = os.environ.get("SMTP_PASSWORD")
+        if env_smtp_password is not None:
+            CONFIG["smtp_password"] = env_smtp_password
+        else:
+            CONFIG["smtp_password"] = file_smtp_password
         if CONFIG["send_email"] and CONFIG["use_smtp"]:
             if not all(
                 [
@@ -514,6 +519,7 @@ def load_config(config_path: str | None = None):
                 CONFIG["send_email"] = False
         persisted_config: Dict[str, Any] = dict(CONFIG)
         persisted_config["send_email"] = original_send_email
+        persisted_config["smtp_password"] = file_smtp_password
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(persisted_config, f, indent=4)
