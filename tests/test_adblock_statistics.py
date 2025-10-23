@@ -303,6 +303,62 @@ def test_log_once_allows_parallel_logging(monkeypatch):
         logger.propagate = original_propagate
 
 
+def test_log_once_and_standard_logging_share_file_handler(monkeypatch, tmp_path):
+    logger = adblock.logger
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+
+    log_file = tmp_path / "combined.log"
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logger.handlers = [file_handler]
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    monkeypatch.setattr(adblock, "logged_messages", set())
+    monkeypatch.setattr(adblock, "console_logged_messages", set())
+    monkeypatch.setattr(config_module, "logged_messages", adblock.logged_messages)
+    monkeypatch.setattr(
+        config_module,
+        "console_logged_messages",
+        adblock.console_logged_messages,
+    )
+
+    barrier = threading.Barrier(2)
+
+    # Sicherstellt, dass bei paralleler Handler-Nutzung keine Logeinträge verloren gehen.
+    def log_once_task():
+        barrier.wait()
+        adblock.log_once(logging.INFO, "log-once file", console=False)
+
+    def standard_log_task():
+        barrier.wait()
+        logger.info("parallel file")
+
+    log_thread = threading.Thread(target=log_once_task)
+    standard_thread = threading.Thread(target=standard_log_task)
+
+    try:
+        log_thread.start()
+        standard_thread.start()
+        log_thread.join()
+        standard_thread.join()
+
+        file_handler.flush()
+        log_lines = log_file.read_text(encoding="utf-8").strip().splitlines()
+
+        assert log_lines.count("log-once file") == 1
+        assert log_lines.count("parallel file") == 1
+    finally:
+        file_handler.close()
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
 def test_ensure_list_stats_entry_initializes_and_updates(monkeypatch):
     stats_store = defaultdict(adblock.create_default_list_stats_entry)
     monkeypatch.setitem(adblock.STATISTICS, "list_stats", stats_store)
