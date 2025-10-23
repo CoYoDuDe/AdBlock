@@ -30,7 +30,6 @@ import socket
 import asyncio
 import backoff
 from enum import Enum
-from types import MethodType
 from typing import Any, Dict, Sequence, Set
 
 from caching import (
@@ -100,6 +99,36 @@ def _is_console_handler(handler: logging.Handler) -> bool:
     return stream is stdout or stream is stderr
 
 
+class _LogOncePerCallFilter(logging.Filter):
+    """Filter, der pro log_once-Aufruf den Handler-Zugriff steuert."""
+
+    __slots__ = ("_allow", "_is_console", "_state", "_marker")
+
+    def __init__(
+        self,
+        allow: bool,
+        is_console: bool,
+        state: dict[str, bool],
+        marker: object,
+    ) -> None:
+        super().__init__(name="adblock.log_once")
+        self._allow = allow
+        self._is_console = is_console
+        self._state = state
+        self._marker = marker
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if getattr(record, "_log_once_marker", None) is not self._marker:
+            return True
+        if not self._allow:
+            return False
+        if self._is_console:
+            self._state["console"] = True
+        else:
+            self._state["file"] = True
+        return True
+
+
 def log_once(level, message, console=True):
     log_to_file = message not in logged_messages
     log_to_console = console and message not in console_logged_messages
@@ -124,56 +153,58 @@ def log_once(level, message, console=True):
             break
         current_logger = current_logger.parent
 
-    file_dispatched = False
-    console_dispatched = False
-    patched_handlers: list[tuple[logging.Handler, MethodType]] = []
-
-    def _patch_handler(
-        target_handler: logging.Handler,
-        allow: bool,
-        console_handler: bool,
-    ) -> None:
-        original_handle = target_handler.handle
-
-        if not allow:
-
-            def wrapper(self, record):
-                return False
-
-        else:
-
-            def wrapper(self, record, _original=original_handle, _is_console=console_handler):
-                nonlocal file_dispatched, console_dispatched
-                result = _original(record)
-                if result:
-                    if _is_console:
-                        console_dispatched = True
-                    else:
-                        file_dispatched = True
-                return result
-
-        target_handler.handle = MethodType(wrapper, target_handler)
-        patched_handlers.append((target_handler, original_handle))
+    dispatch_state = {"file": False, "console": False}
+    filters_attached: list[tuple[logging.Handler, _LogOncePerCallFilter]] = []
 
     if handlers_with_scope:
+        marker = object()
         for handler, is_console in handlers_with_scope:
             allow_logging = log_to_console if is_console else log_to_file
-            _patch_handler(handler, allow_logging, is_console)
+            filter_obj = _LogOncePerCallFilter(allow_logging, is_console, dispatch_state, marker)
+            handler.createLock()
+            handler.acquire()
+            try:
+                handler.addFilter(filter_obj)
+            finally:
+                handler.release()
+            filters_attached.append((handler, filter_obj))
 
         try:
-            logger.log(level, message, stacklevel=3)
+            try:
+                fn, lno, func, sinfo = logger.findCaller(stack_info=False, stacklevel=3)
+            except TypeError:
+                fn, lno, func = logger.findCaller(stack_info=False)
+                sinfo = None
+            record = logger.makeRecord(
+                logger.name,
+                level,
+                fn,
+                lno,
+                message,
+                args=(),
+                exc_info=None,
+                func=func,
+                extra=None,
+                sinfo=sinfo,
+            )
+            setattr(record, "_log_once_marker", marker)
+            logger.handle(record)
         finally:
-            for handler, original_handle in patched_handlers:
-                handler.handle = original_handle
+            for handler, filter_obj in filters_attached:
+                handler.acquire()
+                try:
+                    handler.removeFilter(filter_obj)
+                finally:
+                    handler.release()
     else:
         logger.log(level, message, stacklevel=3)
         # Wenn es keine aktiven Handler gibt, markieren wir den Logeintrag nicht als
         # verarbeitet. Dadurch werden Bootmeldungen erneut ausgegeben, sobald später
         # echte Handler zur Verfügung stehen.
 
-    if log_to_file and file_dispatched:
+    if log_to_file and dispatch_state["file"]:
         logged_messages.add(message)
-    if log_to_console and console_dispatched:
+    if log_to_console and dispatch_state["console"]:
         console_logged_messages.add(message)
 
 
