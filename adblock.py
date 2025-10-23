@@ -161,7 +161,6 @@ def log_once(level, message, console=True):
         for handler, is_console in handlers_with_scope:
             allow_logging = log_to_console if is_console else log_to_file
             filter_obj = _LogOncePerCallFilter(allow_logging, is_console, dispatch_state, marker)
-            handler.createLock()
             handler.acquire()
             try:
                 handler.addFilter(filter_obj)
