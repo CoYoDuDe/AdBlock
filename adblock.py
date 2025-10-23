@@ -110,7 +110,7 @@ def log_once(level, message, console=True):
     if not logger.isEnabledFor(level):
         return
 
-    handlers_with_scope: list[tuple[logging.Handler, bool]] = []
+    handlers_with_scope: list[tuple[logging.Handler, bool, bool]] = []
     seen_handlers: set[int] = set()
     current_logger = logger
     while current_logger:
@@ -119,7 +119,9 @@ def log_once(level, message, console=True):
             if handler_id in seen_handlers:
                 continue
             seen_handlers.add(handler_id)
-            handlers_with_scope.append((handler, _is_console_handler(handler)))
+            is_console_handler = _is_console_handler(handler)
+            counts_for_dedup = not isinstance(handler, logging.NullHandler)
+            handlers_with_scope.append((handler, is_console_handler, counts_for_dedup))
         if not current_logger.propagate:
             break
         current_logger = current_logger.parent
@@ -132,6 +134,7 @@ def log_once(level, message, console=True):
         target_handler: logging.Handler,
         allow: bool,
         console_handler: bool,
+        counts_for_dedup: bool,
     ) -> None:
         original_handle = target_handler.handle
 
@@ -142,10 +145,16 @@ def log_once(level, message, console=True):
 
         else:
 
-            def wrapper(self, record, _original=original_handle, _is_console=console_handler):
+            def wrapper(
+                self,
+                record,
+                _original=original_handle,
+                _is_console=console_handler,
+                _counts_for_dedup=counts_for_dedup,
+            ):
                 nonlocal file_dispatched, console_dispatched
                 result = _original(record)
-                if result:
+                if result and _counts_for_dedup:
                     if _is_console:
                         console_dispatched = True
                     else:
@@ -156,9 +165,9 @@ def log_once(level, message, console=True):
         patched_handlers.append((target_handler, original_handle))
 
     if handlers_with_scope:
-        for handler, is_console in handlers_with_scope:
+        for handler, is_console, counts_for_dedup in handlers_with_scope:
             allow_logging = log_to_console if is_console else log_to_file
-            _patch_handler(handler, allow_logging, is_console)
+            _patch_handler(handler, allow_logging, is_console, counts_for_dedup)
 
         try:
             logger.log(level, message, stacklevel=3)
