@@ -167,8 +167,9 @@ def log_once(level, message, console=True):
                 handler.handle = original_handle
     else:
         logger.log(level, message, stacklevel=3)
-        file_dispatched = log_to_file
-        console_dispatched = log_to_console
+        # Wenn es keine aktiven Handler gibt, markieren wir den Logeintrag nicht als
+        # verarbeitet. Dadurch werden Bootmeldungen erneut ausgegeben, sobald später
+        # echte Handler zur Verfügung stehen.
 
     if log_to_file and file_dispatched:
         logged_messages.add(message)

@@ -72,6 +72,53 @@ def test_log_once_writes_single_record_and_console_entry(monkeypatch):
         logger.propagate = original_propagate
 
 
+def test_log_once_defers_dedup_until_handlers_exist(monkeypatch):
+    """Regression: Bootmeldungen dürfen erst nach Handler-Setup dedupliziert werden."""
+
+    logger = adblock.logger
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+
+    logger.handlers = []
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    monkeypatch.setattr(adblock, "logged_messages", set())
+    monkeypatch.setattr(adblock, "console_logged_messages", set())
+    monkeypatch.setattr(config_module, "logged_messages", adblock.logged_messages)
+    monkeypatch.setattr(
+        config_module,
+        "console_logged_messages",
+        adblock.console_logged_messages,
+    )
+
+    try:
+        adblock.log_once(logging.INFO, "boot message", console=False)
+
+        assert not adblock.logged_messages
+        assert not adblock.console_logged_messages
+
+        stream = io.StringIO()
+        stream_handler = logging.StreamHandler(stream)
+        stream_handler.setLevel(logging.INFO)
+
+        logger.handlers = [stream_handler]
+
+        adblock.log_once(logging.INFO, "boot message", console=False)
+
+        stream_handler.flush()
+        console_lines = stream.getvalue().strip().splitlines()
+        assert console_lines == ["boot message"]
+        assert adblock.logged_messages == {"boot message"}
+        assert not adblock.console_logged_messages
+    finally:
+        stream_handler.close()
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
 def test_log_once_ignores_suppressed_level_until_logger_allows(monkeypatch):
     records: list[str] = []
 
