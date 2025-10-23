@@ -148,25 +148,20 @@ def log_once(level, message, console=True):
     if not logger.isEnabledFor(level):
         return
 
-    handlers_with_scope: list[tuple[logging.Handler, bool]] = []
-    seen_handlers: set[int] = set()
-    current_logger = logger
-    while current_logger:
-        for handler in current_logger.handlers:
-            handler_id = id(handler)
-            if handler_id in seen_handlers:
-                continue
-            seen_handlers.add(handler_id)
-            handlers_with_scope.append((handler, _is_console_handler(handler)))
-        if not current_logger.propagate:
-            break
-        current_logger = current_logger.parent
-
     dispatch_state = {"file": False, "console": False}
-    if handlers_with_scope:
-        marker = object()
-        with ExitStack() as stack:
-            for handler, is_console in handlers_with_scope:
+    marker = object()
+    with ExitStack() as stack:
+        attached_handler = False
+        seen_handlers: set[int] = set()
+        current_logger = logger
+        while current_logger:
+            for handler in current_logger.handlers:
+                handler_id = id(handler)
+                if handler_id in seen_handlers:
+                    continue
+                seen_handlers.add(handler_id)
+                attached_handler = True
+                is_console = _is_console_handler(handler)
                 allow_logging = log_to_console if is_console else log_to_file
                 filter_obj = _LogOncePerCallFilter(
                     allow_logging, is_console, dispatch_state, marker
@@ -179,7 +174,11 @@ def log_once(level, message, console=True):
                 finally:
                     handler.release()
                 stack.callback(_remove_filter_from_handler, handler, filter_obj)
+            if not current_logger.propagate:
+                break
+            current_logger = current_logger.parent
 
+        if attached_handler:
             try:
                 fn, lno, func, sinfo = logger.findCaller(stack_info=False, stacklevel=3)
             except TypeError:
@@ -199,8 +198,8 @@ def log_once(level, message, console=True):
             )
             setattr(record, "_log_once_marker", marker)
             logger.handle(record)
-    else:
-        logger.log(level, message, stacklevel=3)
+        else:
+            logger.log(level, message, stacklevel=3)
         # Wenn es keine aktiven Handler gibt, markieren wir den Logeintrag nicht als
         # verarbeitet. Dadurch werden Bootmeldungen erneut ausgegeben, sobald später
         # echte Handler zur Verfügung stehen.
