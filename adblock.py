@@ -103,7 +103,7 @@ def _is_console_handler(handler: logging.Handler) -> bool:
 class _LogOncePerCallFilter(logging.Filter):
     """Filter, der pro log_once-Aufruf den Handler-Zugriff steuert."""
 
-    __slots__ = ("_allow", "_is_console", "_state", "_marker")
+    __slots__ = ("_allow", "_is_console", "_state", "_marker", "_handler_level")
 
     def __init__(
         self,
@@ -111,16 +111,20 @@ class _LogOncePerCallFilter(logging.Filter):
         is_console: bool,
         state: dict[str, bool],
         marker: object,
+        handler_level: int,
     ) -> None:
         super().__init__(name="adblock.log_once")
         self._allow = allow
         self._is_console = is_console
         self._state = state
         self._marker = marker
+        self._handler_level = handler_level
 
     def filter(self, record: logging.LogRecord) -> bool:
         if getattr(record, "_log_once_marker", None) is not self._marker:
             return True
+        if record.levelno < self._handler_level:
+            return False
         if not self._allow:
             return False
         if self._is_console:
@@ -163,8 +167,15 @@ def log_once(level, message, console=True):
                 attached_handler = True
                 is_console = _is_console_handler(handler)
                 allow_logging = log_to_console if is_console else log_to_file
+                handler_level = handler.level
+                if handler_level is None or handler_level == logging.NOTSET:
+                    handler_level = current_logger.getEffectiveLevel()
                 filter_obj = _LogOncePerCallFilter(
-                    allow_logging, is_console, dispatch_state, marker
+                    allow_logging,
+                    is_console,
+                    dispatch_state,
+                    marker,
+                    handler_level,
                 )
                 if handler.lock is None:
                     handler.createLock()
