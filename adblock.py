@@ -26,6 +26,7 @@ import shutil
 from argparse import ArgumentParser
 import argparse
 from collections import defaultdict
+from contextlib import ExitStack
 import socket
 import asyncio
 import backoff
@@ -129,6 +130,14 @@ class _LogOncePerCallFilter(logging.Filter):
         return True
 
 
+def _remove_filter_from_handler(handler: logging.Handler, filter_obj: logging.Filter) -> None:
+    handler.acquire()
+    try:
+        handler.removeFilter(filter_obj)
+    finally:
+        handler.release()
+
+
 def log_once(level, message, console=True):
     log_to_file = message not in logged_messages
     log_to_console = console and message not in console_logged_messages
@@ -154,8 +163,6 @@ def log_once(level, message, console=True):
         current_logger = current_logger.parent
 
     dispatch_state = {"file": False, "console": False}
-    filters_attached: list[tuple[logging.Handler, _LogOncePerCallFilter]] = []
-
     if handlers_with_scope:
         marker = object()
         for handler, is_console in handlers_with_scope:
@@ -167,8 +174,20 @@ def log_once(level, message, console=True):
             finally:
                 handler.release()
             filters_attached.append((handler, filter_obj))
+        with ExitStack() as stack:
+            for handler, is_console in handlers_with_scope:
+                allow_logging = log_to_console if is_console else log_to_file
+                filter_obj = _LogOncePerCallFilter(
+                    allow_logging, is_console, dispatch_state, marker
+                )
+                handler.createLock()
+                handler.acquire()
+                try:
+                    handler.addFilter(filter_obj)
+                finally:
+                    handler.release()
+                stack.callback(_remove_filter_from_handler, handler, filter_obj)
 
-        try:
             try:
                 fn, lno, func, sinfo = logger.findCaller(stack_info=False, stacklevel=3)
             except TypeError:
@@ -188,13 +207,6 @@ def log_once(level, message, console=True):
             )
             setattr(record, "_log_once_marker", marker)
             logger.handle(record)
-        finally:
-            for handler, filter_obj in filters_attached:
-                handler.acquire()
-                try:
-                    handler.removeFilter(filter_obj)
-                finally:
-                    handler.release()
     else:
         logger.log(level, message, stacklevel=3)
         # Wenn es keine aktiven Handler gibt, markieren wir den Logeintrag nicht als
@@ -455,6 +467,16 @@ def load_config(config_path: str | None = None):
         ):
             logger.warning("Ungültiges cache_flush_interval, verwende Standard: 300")
             CONFIG["cache_flush_interval"] = 300
+        if (
+            not isinstance(CONFIG["domain_timeout"], (int, float))
+            or CONFIG["domain_timeout"] <= 0
+        ):
+            default_domain_timeout = DEFAULT_CONFIG["domain_timeout"]
+            logger.warning(
+                "Ungültiges domain_timeout, verwende Standard: %s",
+                default_domain_timeout,
+            )
+            CONFIG["domain_timeout"] = default_domain_timeout
         if (
             not isinstance(CONFIG["http_timeout"], (int, float))
             or CONFIG["http_timeout"] <= 0
