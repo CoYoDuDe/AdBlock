@@ -27,14 +27,18 @@ python adblock.py [--config path/zur/config.json] [--debug]
 
 ### Laufzeitabhängigkeiten (`requirements.txt`)
 
-- [aiohttp](https://docs.aiohttp.org/) – Asynchroner HTTP-Client/-Server zum Laden externer Blocklisten
-- [aiodns](https://github.com/saghul/aiodns) – DNS-Lookups mit asyncio, u. a. für Reachability-Checks
-- [aiofiles](https://github.com/Tinche/aiofiles) – Asynchrone Dateizugriffe beim Schreiben der Ergebnisdateien
-- [backoff](https://github.com/litl/backoff) – Strategien für wiederholte Netzwerkversuche bei Fehlern
-- [psutil](https://psutil.readthedocs.io/) – Systemressourcen-Erfassung für Speicher-/Lastentscheidungen
-- [pybloom_live](https://github.com/jaybaird/python-bloomfilter) – Bloom-Filter zur effizienten Duplikaterkennung
-- [idna](https://github.com/kjd/idna) – IDNA-Konvertierung für internationale Domains
-- [requests](https://requests.readthedocs.io/en/latest/) – Klassischer HTTP-Client für Hilfsskripte & SetupHelper-Kompatibilität
+| Paket | Primärquelle | Verwendung im Projekt |
+| --- | --- | --- |
+| aiohttp | [docs.aiohttp.org](https://docs.aiohttp.org/) | Asynchroner HTTP-Client für Blocklisten-Downloads in `adblock.py` |
+| aiodns | [github.com/saghul/aiodns](https://github.com/saghul/aiodns) | DNS-Resolver in `adblock.py`, `networking.py` und `monitoring.py` |
+| aiofiles | [github.com/Tinche/aiofiles](https://github.com/Tinche/aiofiles) | Asynchrone Dateizugriffe für Exportpfade in `adblock.py` |
+| backoff | [github.com/litl/backoff](https://github.com/litl/backoff) | Wiederholungsstrategien für Netzwerkversuche in `adblock.py` und Tests |
+| psutil | [psutil.readthedocs.io](https://psutil.readthedocs.io/) | Ressourcen- und Speichernutzung in `adblock.py`, `caching.py`, `monitoring.py` |
+| pybloom_live | [github.com/jaybaird/python-bloomfilter](https://github.com/jaybaird/python-bloomfilter) | Bloom-Filter zur Duplikaterkennung in `caching.py` |
+| idna | [github.com/kjd/idna](https://github.com/kjd/idna) | IDNA-Konvertierung in `filter_engine.py` |
+| requests | [requests.readthedocs.io](https://requests.readthedocs.io/en/latest/) | Zusätzlicher HTTP-Client für SetupHelper-/Hilfsskripte |
+
+Alle oben genannten Pakete sind in `requirements.txt` hinterlegt und decken die externen Imports in `adblock.py`, `networking.py`, `caching.py` und den übrigen Modulen vollständig ab.
 
 ### Entwicklungs- & Test-Tooling (`requirements-dev.txt`)
 
@@ -42,6 +46,8 @@ python adblock.py [--config path/zur/config.json] [--debug]
 - [ruff](https://docs.astral.sh/ruff/) – Schnelles Linting mit Fokus auf Fehlerprävention
 - [black](https://black.readthedocs.io/en/stable/) – Konsistente Code-Formatierung
 - [flake8](https://flake8.pycqa.org/en/latest/) – Ergänzendes Linting & Style-Prüfungen
+
+> 💡 Hinweis: Für lokale Entwicklungsumgebungen lassen sich die Tools bequem mit `pip install -r requirements-dev.txt` installieren.
 
 ### Referenzprojekte & Kompatibilitätsziele
 
