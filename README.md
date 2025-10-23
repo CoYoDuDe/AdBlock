@@ -30,6 +30,17 @@ python adblock.py [--config path/zur/config.json] [--debug]
 ./setup_env.sh
 ```
 
+Das Skript erstellt eine virtuelle Umgebung, installiert alle Basisabhängigkeiten aus `requirements.txt` und ergänzt anschließend die Entwicklungswerkzeuge aus `requirements-dev.txt`.
+
+## 👩‍💻 Entwicklung
+
+Die Entwicklungswerkzeuge `ruff`, `black`, `flake8` und `pytest` werden über `requirements-dev.txt` verwaltet. Das Setup-Skript installiert sie automatisch; alternativ können sie manuell mit `pip install -r requirements-dev.txt` nachinstalliert werden. Für weitergehende Konfigurationsmöglichkeiten siehe die offiziellen Dokumentationen:
+
+- [Ruff – Konfiguration & Rules](https://docs.astral.sh/ruff/)
+- [Black – Formatierungsoptionen](https://black.readthedocs.io/en/stable/)
+- [Flake8 – Linting-Regeln & Plugins](https://flake8.pycqa.org/en/latest/)
+- [Pytest – Test- und Plugin-Referenz](https://docs.pytest.org/en/latest/)
+
 ## ❓ Troubleshooting
 
 Sollte das Laden der Blocklisten fehlschlagen, prüfe die Internetverbindung
