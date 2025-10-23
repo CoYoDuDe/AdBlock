@@ -216,6 +216,54 @@ def test_log_once_ignores_suppressed_level_until_logger_allows(monkeypatch):
         logger.propagate = original_propagate
 
 
+def test_log_once_honours_handler_level_changes(monkeypatch, tmp_path):
+    logger = adblock.logger
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+
+    log_file = tmp_path / "handler-level.log"
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(logging.WARNING)
+    file_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logger.handlers = [file_handler]
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    monkeypatch.setattr(adblock, "logged_messages", set())
+    monkeypatch.setattr(adblock, "console_logged_messages", set())
+    monkeypatch.setattr(config_module, "logged_messages", adblock.logged_messages)
+    monkeypatch.setattr(
+        config_module,
+        "console_logged_messages",
+        adblock.console_logged_messages,
+    )
+
+    message = "handler level sensitive"
+
+    try:
+        adblock.log_once(logging.INFO, message, console=False)
+
+        file_handler.flush()
+        if log_file.exists():
+            assert log_file.read_text(encoding="utf-8") == ""
+        assert not adblock.logged_messages
+
+        file_handler.setLevel(logging.INFO)
+        adblock.log_once(logging.INFO, message, console=False)
+
+        file_handler.flush()
+        lines = log_file.read_text(encoding="utf-8").strip().splitlines()
+        assert lines == [message]
+        assert adblock.logged_messages == {message}
+    finally:
+        file_handler.close()
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
 def test_log_once_respects_filters_and_parent_handlers(monkeypatch):
     child_records: list[str] = []
     parent_records: list[str] = []
