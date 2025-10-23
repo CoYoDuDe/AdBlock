@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import subprocess
+import threading
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -244,6 +245,62 @@ def test_log_once_respects_filters_and_parent_handlers(monkeypatch):
         parent_logger.filters = original_parent_filters
         parent_logger.setLevel(original_parent_level)
         parent_logger.propagate = original_parent_propagate
+
+
+def test_log_once_allows_parallel_logging(monkeypatch):
+    records: list[str] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    logger = adblock.logger
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+
+    capture_handler = CaptureHandler(level=logging.INFO)
+
+    logger.handlers = [capture_handler]
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    monkeypatch.setattr(adblock, "logged_messages", set())
+    monkeypatch.setattr(adblock, "console_logged_messages", set())
+    monkeypatch.setattr(config_module, "logged_messages", adblock.logged_messages)
+    monkeypatch.setattr(
+        config_module,
+        "console_logged_messages",
+        adblock.console_logged_messages,
+    )
+
+    barrier = threading.Barrier(2)
+
+    # Die parallele Ausführung stellt sicher, dass log_once keine konkurrierenden Handler-Aufrufe blockiert.
+
+    def log_once_task():
+        barrier.wait()
+        adblock.log_once(logging.INFO, "log-once message", console=False)
+
+    def standard_log_task():
+        barrier.wait()
+        logger.info("parallel message")
+
+    first = threading.Thread(target=log_once_task)
+    second = threading.Thread(target=standard_log_task)
+
+    try:
+        first.start()
+        second.start()
+        first.join()
+        second.join()
+
+        assert records.count("log-once message") == 1
+        assert records.count("parallel message") == 1
+    finally:
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
 
 
 def test_ensure_list_stats_entry_initializes_and_updates(monkeypatch):
