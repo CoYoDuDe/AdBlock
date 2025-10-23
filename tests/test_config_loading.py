@@ -78,6 +78,33 @@ def test_load_config_preserves_user_email_preference_without_password(
     assert persisted_config["send_email"] is True
 
 
+def test_load_config_env_password_not_persisted(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "use_smtp": True,
+                "send_email": True,
+                "smtp_server": "smtp.example.com",
+                "smtp_port": 587,
+                "smtp_user": "user@example.com",
+                "email_recipient": "admin@example.com",
+                "email_sender": "bot@example.com",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("SMTP_PASSWORD", "super-geheimes-passwort")
+
+    load_config(str(config_path))
+
+    assert CONFIG["smtp_password"] == "super-geheimes-passwort"
+    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    # Compliance & Sicherheit: Secrets aus Umgebungsvariablen dürfen niemals im Klartext persistiert werden.
+    assert "smtp_password" not in saved_config
+
+
 def test_load_config_resets_invalid_domain_timeout(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({"domain_timeout": 0}), encoding="utf-8")
