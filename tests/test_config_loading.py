@@ -113,3 +113,16 @@ def test_load_config_resets_invalid_domain_timeout(tmp_path):
 
     # Verhindert Laufzeitfehler in aiodns.DNSResolver(..., timeout=...) und im Ressourcenmonitor.
     assert CONFIG["domain_timeout"] == DEFAULT_CONFIG["domain_timeout"]
+
+
+def test_load_config_does_not_persist_env_password(tmp_path, monkeypatch):
+    monkeypatch.setenv("SMTP_PASSWORD", "env-passwort")
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    load_config(str(config_path))
+
+    assert CONFIG["smtp_password"] == "env-passwort"
+    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+    # Secrets aus Umgebungsvariablen dürfen nicht in config.json landen (Compliance & Sicherheit).
+    assert saved_config.get("smtp_password", "") != "env-passwort"
