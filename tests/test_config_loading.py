@@ -48,3 +48,13 @@ def test_load_config_retains_smtp_password(tmp_path, monkeypatch):
     saved_config = json.loads(config_path.read_text(encoding="utf-8"))
     # Der SMTP-Zugang muss erhalten bleiben, damit networking.send_email weiterhin authentifizieren kann.
     assert saved_config["smtp_password"] == password_value
+
+
+def test_load_config_resets_invalid_domain_timeout(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"domain_timeout": 0}), encoding="utf-8")
+
+    load_config(str(config_path))
+
+    # Verhindert Laufzeitfehler in aiodns.DNSResolver(..., timeout=...) und im Ressourcenmonitor.
+    assert CONFIG["domain_timeout"] == DEFAULT_CONFIG["domain_timeout"]

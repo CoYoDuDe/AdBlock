@@ -459,6 +459,16 @@ def load_config(config_path: str | None = None):
             logger.warning("Ungültiges cache_flush_interval, verwende Standard: 300")
             CONFIG["cache_flush_interval"] = 300
         if (
+            not isinstance(CONFIG["domain_timeout"], (int, float))
+            or CONFIG["domain_timeout"] <= 0
+        ):
+            default_domain_timeout = DEFAULT_CONFIG["domain_timeout"]
+            logger.warning(
+                "Ungültiges domain_timeout, verwende Standard: %s",
+                default_domain_timeout,
+            )
+            CONFIG["domain_timeout"] = default_domain_timeout
+        if (
             not isinstance(CONFIG["http_timeout"], (int, float))
             or CONFIG["http_timeout"] <= 0
         ):
