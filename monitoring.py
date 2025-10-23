@@ -92,7 +92,19 @@ async def monitor_resources(cache_manager, config: dict) -> None:
         thresholds.get("emergency_memory_mb", low_memory_threshold / 2 or 0)
     )
     cpu_threshold = float(thresholds.get("high_cpu_percent", 100))
-    latency_threshold = float(thresholds.get("high_latency_s", float("inf")))
+    raw_latency_threshold = thresholds.get("high_latency_s", float("inf"))
+    if raw_latency_threshold is None:
+        latency_threshold = float("inf")
+    else:
+        try:
+            latency_threshold = float(raw_latency_threshold)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Ungültiger Latenzschwellenwert %r – verwende Unendlich", 
+                raw_latency_threshold,
+            )
+            latency_threshold = float("inf")
+    latency_monitoring_enabled = math.isfinite(latency_threshold)
 
     def moving_average(values: deque[float]) -> float:
         return sum(values) / len(values) if values else 0.0
@@ -142,7 +154,9 @@ async def monitor_resources(cache_manager, config: dict) -> None:
                 avg_free_memory <= low_memory_threshold and not memory_emergency
             )
             cpu_high = avg_cpu >= cpu_threshold
-            latency_high = avg_latency >= latency_threshold
+            latency_high = (
+                latency_monitoring_enabled and avg_latency >= latency_threshold
+            )
 
             if memory_emergency:
                 violation_streaks["emergency_memory"] += 1
@@ -159,12 +173,17 @@ async def monitor_resources(cache_manager, config: dict) -> None:
             else:
                 violation_streaks["cpu"] = 0
 
-            if latency_high:
-                violation_streaks["latency"] += 1
+            if latency_monitoring_enabled:
+                if latency_high:
+                    violation_streaks["latency"] += 1
+                else:
+                    violation_streaks["latency"] = 0
             else:
                 violation_streaks["latency"] = 0
 
-            any_violation = memory_emergency or memory_low or cpu_high or latency_high
+            any_violation = (
+                memory_emergency or memory_low or cpu_high or latency_high
+            )
             if any_violation:
                 recovery_streak = 0
             elif sample_count >= consecutive_required:
@@ -200,7 +219,8 @@ async def monitor_resources(cache_manager, config: dict) -> None:
                 alert_level = logging.ERROR
                 send_alert = True
             elif (
-                sample_count >= consecutive_required
+                latency_monitoring_enabled
+                and sample_count >= consecutive_required
                 and violation_streaks["latency"] >= consecutive_required
             ):
                 desired_mode = SystemMode.EMERGENCY
